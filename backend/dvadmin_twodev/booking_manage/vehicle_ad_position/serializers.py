@@ -31,10 +31,13 @@ class VehicleAdPositionModelSerializer(CustomModelSerializer):
 
     # 分配状态显示名称
     allocation_status_display = serializers.SerializerMethodField()
-    
+
+    # 确认状态显示名称
+    confirm_status_display = serializers.SerializerMethodField()
+
     # 基础媒体类型名称（从resource_id关联获取）
     base_media_type_name = serializers.SerializerMethodField()
-    
+
     # 车牌号（从vehicle_id关联获取）
     vehicle_plate = serializers.SerializerMethodField()
 
@@ -60,6 +63,13 @@ class VehicleAdPositionModelSerializer(CustomModelSerializer):
             "actual_on_date": {"required": False, "allow_null": True, "format": "%Y-%m-%d", "input_formats": ["%Y-%m-%d", "%Y-%m-%d %H:%M:%S"]},
             "actual_off_date": {"required": False, "allow_null": True, "format": "%Y-%m-%d", "input_formats": ["%Y-%m-%d", "%Y-%m-%d %H:%M:%S"]},
             "allocation_status": {"required": True, "allow_null": False},
+            "media_type_id": {"required": False, "allow_null": True},
+            "media_type_name": {"required": False, "allow_null": True, "allow_blank": True},
+            "media_json": {"required": False, "allow_null": True},
+            "confirm_status": {"required": False, "allow_null": False},
+            "exclude_reason": {"required": False, "allow_null": True, "allow_blank": True},
+            "confirm_user_id": {"required": False, "allow_null": True},
+            "confirm_time": {"required": False, "allow_null": True, "format": "%Y-%m-%d %H:%M:%S", "input_formats": ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d"]},
             "enabled_mark": {"required": False, "allow_null": True},
             "delete_mark": {"required": False, "allow_null": True},
         }
@@ -77,6 +87,15 @@ class VehicleAdPositionModelSerializer(CustomModelSerializer):
             4: "已取消",
         }
         return status_map.get(obj.allocation_status, "未知")
+
+    def get_confirm_status_display(self, obj):
+        """营运公司确认状态显示名称"""
+        status_map = {
+            1: "待确认",
+            2: "已确认",
+            3: "已剔除",
+        }
+        return status_map.get(obj.confirm_status, "未知")
     
     def get_base_media_type_name(self, obj):
         """获取基础媒体类型名称"""
@@ -541,8 +560,11 @@ class VehicleAdPositionModelListSerializer(VehicleAdPositionModelSerializer):
             "resource_status_display",
             "vehicle_id",
             "vehicle_no",
-            "vehicle_plate",  # 车牌号
+            "vehicle_plate",
             # 媒体类型
+            "media_type_id",
+            "media_type_name",
+            "media_json",
             "base_media_type_name",
             # 时间信息
             "reserved_start_date",
@@ -552,6 +574,12 @@ class VehicleAdPositionModelListSerializer(VehicleAdPositionModelSerializer):
             # 状态信息
             "allocation_status",
             "allocation_status_display",
+            # 营运公司确认
+            "confirm_status",
+            "confirm_status_display",
+            "exclude_reason",
+            "confirm_user_id",
+            "confirm_time",
             # 计算字段
             "is_enabled",
             # 审计字段

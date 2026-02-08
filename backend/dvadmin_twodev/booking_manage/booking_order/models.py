@@ -60,8 +60,8 @@ class BookingOrderModel(BaseDataModel):
         null=False,
         blank=False,
         verbose_name="预订单类型",
-        help_text="预订单类型：1=新预订, 2=续期, 3=变更",
-        db_comment="预订单类型：1=新预订, 2=续期, 3=变更"
+        help_text="预订单类型：1=新预订, 2=续期, 3=变更, 4=重新发起",
+        db_comment="预订单类型：1=新预订, 2=续期, 3=变更, 4=重新发起"
     )
 
     # 原预订单ID
@@ -82,10 +82,19 @@ class BookingOrderModel(BaseDataModel):
     booking_status = models.IntegerField(
         null=False,
         blank=False,
-        default=3,
+        default=1,
         verbose_name="预订单状态",
-        help_text="预订单状态：1=草稿, 2=待审批, 3=审批中, 4=已通过, 5=已完成, 6=已取消, 7=已驳回",
-        db_comment="预订单状态：1=草稿, 2=待审批, 3=审批中, 4=已通过, 5=已完成, 6=已取消, 7=已驳回"
+        help_text="预订单状态：1=草稿, 2=待媒体部初审, 3=待营运公司审核, 4=待媒体部复审, 5=已通过, 6=已完成, 7=已驳回, 8=已取消",
+        db_comment="预订单状态：1=草稿, 2=待媒体部初审, 3=待营运公司审核, 4=待媒体部复审, 5=已通过, 6=已完成, 7=已驳回, 8=已取消"
+    )
+
+    # 当前审批节点
+    current_approval_node = models.IntegerField(
+        null=True,
+        blank=True,
+        verbose_name="当前审批节点",
+        help_text="当前审批节点：1=媒体部初审, 2=营运公司审核, 3=媒体部复审, NULL=无需审批或已结束",
+        db_comment="当前审批节点：1=媒体部初审, 2=营运公司审核, 3=媒体部复审, NULL=无需审批或已结束"
     )
 
     # 广告内容描述
@@ -177,6 +186,47 @@ class BookingOrderModel(BaseDataModel):
         verbose_name="提交时间",
         help_text="订单提交时间",
         db_comment="提交时间，订单提交时间"
+    )
+
+    # 驳回原因
+    reject_reason = models.TextField(
+        null=True,
+        blank=True,
+        verbose_name="驳回原因",
+        help_text="审批驳回时填写",
+        db_comment="驳回原因，审批驳回时填写"
+    )
+
+    # 驳回节点
+    reject_node = models.IntegerField(
+        null=True,
+        blank=True,
+        verbose_name="驳回节点",
+        help_text="记录在哪个节点被驳回：1=媒体部初审, 2=营运公司审核, 3=媒体部复审",
+        db_comment="驳回节点：1=媒体部初审, 2=营运公司审核, 3=媒体部复审"
+    )
+
+    # 驳回人ID
+    reject_user_id = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        db_column='reject_user_id',
+        db_constraint=False,
+        null=True,
+        blank=True,
+        related_name='rejected_booking_orders',
+        verbose_name="驳回人ID",
+        help_text="驳回操作人",
+        db_comment="驳回人ID，驳回操作人"
+    )
+
+    # 驳回时间
+    reject_time = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="驳回时间",
+        help_text="驳回时间",
+        db_comment="驳回时间"
     )
 
     # 备注

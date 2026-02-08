@@ -80,3 +80,85 @@ export function exportData(params: any) {
     });
 }
 
+// ==================== 审批流程接口 ====================
+
+/** 提交审批（草稿 → 待媒体部初审） */
+export function submitForApproval(id: string) {
+    return request({ url: apiPrefix + id + '/submit/', method: 'post' });
+}
+
+/** 媒体部初审通过 */
+export function firstReviewApprove(id: string, data?: { review_comment?: string }) {
+    return request({ url: apiPrefix + id + '/first_review_approve/', method: 'post', data });
+}
+
+/** 媒体部初审驳回 */
+export function firstReviewReject(id: string, data: { reject_reason: string }) {
+    return request({ url: apiPrefix + id + '/first_review_reject/', method: 'post', data });
+}
+
+/** 营运公司确认车位 */
+export function companyConfirmPosition(id: string, data: { position_id: string }) {
+    return request({ url: apiPrefix + id + '/company_confirm_position/', method: 'post', data });
+}
+
+/** 营运公司剔除车位 */
+export function companyExcludePosition(id: string, data: { position_id: string; exclude_reason: string }) {
+    return request({ url: apiPrefix + id + '/company_exclude_position/', method: 'post', data });
+}
+
+/** 营运公司换车 */
+export function companySwapVehicle(id: string, data: { position_id: string; new_vehicle_id: string; swap_reason?: string }) {
+    return request({ url: apiPrefix + id + '/company_swap_vehicle/', method: 'post', data });
+}
+
+/** 营运公司批量确认 */
+export function companyBatchConfirm(id: string, data?: { company_id?: string }) {
+    return request({ url: apiPrefix + id + '/company_batch_confirm/', method: 'post', data });
+}
+
+/** 营运公司审核完成 */
+export function companyReviewComplete(id: string, data?: { review_comment?: string }) {
+    return request({ url: apiPrefix + id + '/company_review_complete/', method: 'post', data });
+}
+
+/** 媒体部复审通过 */
+export function finalReviewApprove(id: string, data?: { review_comment?: string }) {
+    return request({ url: apiPrefix + id + '/final_review_approve/', method: 'post', data });
+}
+
+/** 媒体部复审驳回 */
+export function finalReviewReject(id: string, data: { reject_reason: string }) {
+    return request({ url: apiPrefix + id + '/final_review_reject/', method: 'post', data });
+}
+
+/** 驳回后重新发起 */
+export function resubmit(id: string) {
+    return request({ url: apiPrefix + id + '/resubmit/', method: 'post' });
+}
+
+/** 取消预订单 */
+export function cancelOrder(id: string, data?: { cancel_reason?: string }) {
+    return request({ url: apiPrefix + id + '/cancel/', method: 'post', data });
+}
+
+/** 获取当前用户可执行操作 */
+export function getAvailableActions(id: string) {
+    return request({ url: apiPrefix + id + '/get_available_actions/', method: 'get' });
+}
+
+/** 审批中新增车位 */
+export function reviewAddPosition(id: string, data: { booking_detail_id: string; vehicle_id: string; reason?: string }) {
+    return request({ url: apiPrefix + id + '/review_add_position/', method: 'post', data });
+}
+
+/** 审批中删除车位 */
+export function reviewRemovePosition(id: string, data: { position_id: string; reason?: string }) {
+    return request({ url: apiPrefix + id + '/review_remove_position/', method: 'post', data });
+}
+
+/** 按营运公司分组获取车位 */
+export function getPositionsByCompany(id: string) {
+    return request({ url: apiPrefix + id + '/get_positions_by_company/', method: 'get' });
+}
+

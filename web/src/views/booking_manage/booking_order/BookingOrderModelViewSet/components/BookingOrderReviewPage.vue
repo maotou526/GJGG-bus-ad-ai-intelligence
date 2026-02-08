@@ -149,26 +149,117 @@
       <el-empty v-else description="暂无车位分配信息" />
     </el-card>
 
+    <!-- 审批流程进度 -->
+    <el-card v-if="mainOrder" shadow="never" class="section-card">
+      <template #header>
+        <div class="section-header">
+          <span class="section-title">审批流程</span>
+          <el-tag v-if="mainOrder.reject_reason" type="danger">
+            驳回原因：{{ mainOrder.reject_reason }}
+          </el-tag>
+        </div>
+      </template>
+      <el-steps :active="currentStep" finish-status="success" align-center>
+        <el-step title="草稿" description="创建预订单" />
+        <el-step title="媒体部初审" description="审核资源分配" />
+        <el-step title="营运公司审核" description="确认/换车/剔除" />
+        <el-step title="媒体部复审" description="最终审核" />
+        <el-step title="已通过" description="创建上刊订单" />
+      </el-steps>
+    </el-card>
+
+    <!-- 营运公司审核 - 按公司分组的车位确认 -->
+    <el-card v-if="mainOrder && mainOrder.booking_status === 3" shadow="never" class="section-card">
+      <template #header>
+        <div class="section-header">
+          <span class="section-title">营运公司车位确认</span>
+          <div>
+            <el-tag type="info" style="margin-right: 8px">
+              待确认: {{ positionStats.pending }}
+            </el-tag>
+            <el-tag type="success" style="margin-right: 8px">
+              已确认: {{ positionStats.confirmed }}
+            </el-tag>
+            <el-tag type="danger">
+              已剔除: {{ positionStats.excluded }}
+            </el-tag>
+          </div>
+        </div>
+      </template>
+
+      <el-table :data="positionList" border stripe style="width: 100%">
+        <el-table-column type="index" label="序号" width="60" align="center" />
+        <el-table-column prop="roadline_name" label="线路" min-width="80" />
+        <el-table-column prop="roadline_company_name" label="营运公司" min-width="80" />
+        <el-table-column label="车牌号" min-width="100">
+          <template #default="{ row }">{{ getVehiclePlate(row) }}</template>
+        </el-table-column>
+        <el-table-column label="媒体类型" min-width="80">
+          <template #default="{ row }">{{ row.base_media_type_name || row.media_type_name || '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="reserved_start_date" label="开始日期" width="110" />
+        <el-table-column prop="reserved_end_date" label="结束日期" width="110" />
+        <el-table-column label="确认状态" width="100" align="center">
+          <template #default="{ row }">
+            <el-tag :type="getConfirmStatusType(row.confirm_status)" size="small">
+              {{ getConfirmStatusText(row.confirm_status) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="剔除原因" min-width="100">
+          <template #default="{ row }">{{ row.exclude_reason || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="220" align="center" fixed="right">
+          <template #default="{ row }">
+            <template v-if="row.confirm_status === 1">
+              <el-button type="success" size="small" link @click="handleConfirmPosition(row)">确认</el-button>
+              <el-button type="warning" size="small" link @click="handleSwapVehicle(row)">换车</el-button>
+              <el-button type="danger" size="small" link @click="handleExcludePosition(row)">剔除</el-button>
+            </template>
+            <span v-else style="color: #909399">已处理</span>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <div style="margin-top: 16px; text-align: right">
+        <el-button @click="handleBatchConfirm" type="primary">批量全部确认</el-button>
+      </div>
+    </el-card>
+
     <!-- 审核操作区域 -->
-    <el-card v-if="!isReadOnly" shadow="never" class="section-card">
+    <el-card v-if="!isReadOnly && mainOrder" shadow="never" class="section-card">
       <template #header>
         <div class="section-header">
           <span class="section-title">审核操作</span>
         </div>
       </template>
-      
+
       <el-form label-width="100px">
         <el-form-item label="审核意见">
-          <el-input 
-            v-model="reviewComment" 
-            type="textarea" 
+          <el-input
+            v-model="reviewComment"
+            type="textarea"
             :rows="4"
             placeholder="请输入审核意见..."
           />
         </el-form-item>
         <el-form-item>
-          <el-button type="success" @click="handleApprove">通过审核</el-button>
-          <el-button type="danger" @click="handleReject">驳回</el-button>
+          <!-- 媒体部初审 -->
+          <template v-if="mainOrder.booking_status === 2">
+            <el-button type="success" @click="handleFirstReviewApprove">初审通过</el-button>
+            <el-button type="danger" @click="handleFirstReviewReject">初审驳回</el-button>
+          </template>
+          <!-- 营运公司审核完成 -->
+          <template v-if="mainOrder.booking_status === 3">
+            <el-button type="primary" @click="handleCompanyReviewComplete" :disabled="positionStats.pending > 0">
+              营运审核完成 {{ positionStats.pending > 0 ? `(还有${positionStats.pending}个待确认)` : '' }}
+            </el-button>
+          </template>
+          <!-- 媒体部复审 -->
+          <template v-if="mainOrder.booking_status === 4">
+            <el-button type="success" @click="handleFinalReviewApprove">复审通过</el-button>
+            <el-button type="danger" @click="handleFinalReviewReject">复审驳回</el-button>
+          </template>
           <el-button @click="handleClose">关闭</el-button>
         </el-form-item>
       </el-form>
@@ -753,12 +844,54 @@ const handleDetailRowClick = (row: any) => {
   }
 };
 
+// 审批流程步骤计算
+const currentStep = computed(() => {
+  if (!mainOrder.value) return 0;
+  const statusMap: Record<number, number> = {
+    1: 0,  // 草稿
+    2: 1,  // 待媒体部初审
+    3: 2,  // 待营运公司审核
+    4: 3,  // 待媒体部复审
+    5: 4,  // 已通过
+    6: 4,  // 已完成
+    7: -1, // 已驳回（特殊处理）
+    8: -1, // 已取消
+  };
+  return statusMap[mainOrder.value.booking_status] ?? 0;
+});
+
+// 车位确认状态统计
+const positionStats = computed(() => {
+  const stats = { total: 0, confirmed: 0, excluded: 0, pending: 0 };
+  positionList.value.forEach((p: any) => {
+    if (p.allocation_status !== 1) return; // 只统计已分配的
+    stats.total++;
+    if (p.confirm_status === 2) stats.confirmed++;
+    else if (p.confirm_status === 3) stats.excluded++;
+    else stats.pending++;
+  });
+  return stats;
+});
+
+// 确认状态文本
+const getConfirmStatusText = (status: number) => {
+  const map: Record<number, string> = { 1: '待确认', 2: '已确认', 3: '已剔除' };
+  return map[status] || '未知';
+};
+
+// 确认状态标签类型
+const getConfirmStatusType = (status: number) => {
+  const map: Record<number, string> = { 1: 'warning', 2: 'success', 3: 'danger' };
+  return map[status] || 'info';
+};
+
 // 获取状态类型
 const getStatusType = (status: string) => {
   const statusMap: Record<string, string> = {
     '草稿': 'info',
-    '待审批': 'warning',
-    '审批中': 'warning',
+    '待媒体部初审': 'warning',
+    '待营运公司审核': 'warning',
+    '待媒体部复审': 'warning',
     '已通过': 'success',
     '已完成': 'success',
     '已取消': 'info',
@@ -998,81 +1131,201 @@ const getResourceStatusTagType = (row: any) => {
   return 'info'; // 默认
 };
 
-// 处理通过审核
-const handleApprove = async () => {
-  if (!orderId.value) {
-    ElMessage.error('订单ID为空，无法执行审核操作');
-    return;
-  }
+// ==================== 审批流程操作 ====================
+
+// 媒体部初审通过
+const handleFirstReviewApprove = async () => {
   try {
-    await ElMessageBox.confirm('确认通过此定单的审核吗？审核通过后将自动创建上刊订单。', '确认操作', {
-      type: 'success',
-    });
-    
-    // 调用审核通过的API
+    await ElMessageBox.confirm('确认初审通过？将转交营运公司审核。', '确认操作', { type: 'success' });
     const res = await request({
-      url: `/api/BookingOrderModelViewSet/${orderId.value}/approve/`,
+      url: `/api/BookingOrderModelViewSet/${orderId.value}/first_review_approve/`,
       method: 'post',
-      data: {
-        review_comment: reviewComment.value || '',
-      },
+      data: { review_comment: reviewComment.value || '' },
     });
-    
     if (res && res.code === 2000) {
-      ElMessage.success(res.msg || '审核通过！已自动创建上刊订单');
+      ElMessage.success(res.msg || '初审通过');
       emit('refresh');
       emit('close');
     } else {
-      ElMessage.error(res.msg || '审核失败');
+      ElMessage.error(res?.msg || '操作失败');
     }
-  } catch (error: any) {
-    if (error !== 'cancel') {
-      console.error('审核通过失败:', error);
-      ElMessage.error(error?.response?.data?.msg || error?.message || '审核失败');
-    }
+  } catch (e: any) {
+    if (e !== 'cancel') ElMessage.error(e?.response?.data?.msg || e?.message || '操作失败');
   }
 };
 
-// 处理驳回
-const handleReject = async () => {
-  if (!orderId.value) {
-    ElMessage.error('订单ID为空，无法执行驳回操作');
-    return;
-  }
+// 媒体部初审驳回
+const handleFirstReviewReject = async () => {
   if (!reviewComment.value.trim()) {
     ElMessage.warning('驳回时必须填写审核意见');
     return;
   }
-  
   try {
-    await ElMessageBox.confirm('确认驳回此订单吗？', '确认操作', {
-      type: 'warning',
-    });
-    
-    // 调用驳回的API（如果后端有实现）
-    // 目前先更新订单状态为已驳回
+    await ElMessageBox.confirm('确认驳回此订单？', '确认驳回', { type: 'warning' });
     const res = await request({
-      url: `/api/BookingOrderModelViewSet/${orderId.value}/`,
-      method: 'put',
-      data: {
-        ...mainOrder.value,
-        booking_status: 7,  // 已驳回
-        remark: reviewComment.value,
-      },
+      url: `/api/BookingOrderModelViewSet/${orderId.value}/first_review_reject/`,
+      method: 'post',
+      data: { reject_reason: reviewComment.value },
     });
-    
     if (res && res.code === 2000) {
-      ElMessage.success('已驳回');
+      ElMessage.success(res.msg || '已驳回');
       emit('refresh');
       emit('close');
     } else {
-      ElMessage.error(res.msg || '驳回失败');
+      ElMessage.error(res?.msg || '驳回失败');
     }
-  } catch (error: any) {
-    if (error !== 'cancel') {
-      console.error('驳回失败:', error);
-      ElMessage.error(error?.response?.data?.msg || error?.message || '驳回失败');
+  } catch (e: any) {
+    if (e !== 'cancel') ElMessage.error(e?.response?.data?.msg || e?.message || '驳回失败');
+  }
+};
+
+// 营运公司确认车位
+const handleConfirmPosition = async (row: any) => {
+  try {
+    const res = await request({
+      url: `/api/BookingOrderModelViewSet/${orderId.value}/company_confirm_position/`,
+      method: 'post',
+      data: { position_id: row.id },
+    });
+    if (res && res.code === 2000) {
+      ElMessage.success('车位已确认');
+      await loadAllPositions();
+    } else {
+      ElMessage.error(res?.msg || '确认失败');
     }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.msg || e?.message || '确认失败');
+  }
+};
+
+// 营运公司剔除车位
+const handleExcludePosition = async (row: any) => {
+  try {
+    const { value: reason } = await ElMessageBox.prompt('请输入剔除原因', '剔除车位', {
+      confirmButtonText: '确认剔除',
+      cancelButtonText: '取消',
+      inputType: 'textarea',
+      inputValidator: (val: string) => !!val?.trim() || '剔除原因不能为空',
+      type: 'warning',
+    });
+    const res = await request({
+      url: `/api/BookingOrderModelViewSet/${orderId.value}/company_exclude_position/`,
+      method: 'post',
+      data: { position_id: row.id, exclude_reason: reason },
+    });
+    if (res && res.code === 2000) {
+      ElMessage.success('车位已剔除');
+      await loadAllPositions();
+    } else {
+      ElMessage.error(res?.msg || '剔除失败');
+    }
+  } catch (e: any) {
+    if (e !== 'cancel') ElMessage.error(e?.response?.data?.msg || e?.message || '剔除失败');
+  }
+};
+
+// 营运公司换车
+const handleSwapVehicle = async (row: any) => {
+  // 获取线路下的可用车辆
+  const roadlineId = typeof row.roadline_id === 'object' ? row.roadline_id?.id : row.roadline_id;
+  await loadRoadlineVehicles(roadlineId);
+
+  // 填充编辑表单
+  editPositionForm.value = {
+    id: row.id,
+    vehicle_id: '',
+    roadline_id: roadlineId || '',
+    roadline_name: row.roadline_name || '',
+    reserved_start_date: row.reserved_start_date || '',
+    reserved_end_date: row.reserved_end_date || '',
+    _isSwap: true, // 标记为换车操作
+  };
+  editPositionDialogVisible.value = true;
+};
+
+// 批量确认
+const handleBatchConfirm = async () => {
+  try {
+    await ElMessageBox.confirm('确认将所有待确认的车位全部确认？', '批量确认', { type: 'warning' });
+    const res = await request({
+      url: `/api/BookingOrderModelViewSet/${orderId.value}/company_batch_confirm/`,
+      method: 'post',
+    });
+    if (res && res.code === 2000) {
+      ElMessage.success(res.msg || '批量确认成功');
+      await loadAllPositions();
+    } else {
+      ElMessage.error(res?.msg || '批量确认失败');
+    }
+  } catch (e: any) {
+    if (e !== 'cancel') ElMessage.error(e?.response?.data?.msg || e?.message || '批量确认失败');
+  }
+};
+
+// 营运公司审核完成
+const handleCompanyReviewComplete = async () => {
+  try {
+    await ElMessageBox.confirm('确认营运公司审核完成？将转交媒体部复审。', '确认完成', { type: 'success' });
+    const res = await request({
+      url: `/api/BookingOrderModelViewSet/${orderId.value}/company_review_complete/`,
+      method: 'post',
+      data: { review_comment: reviewComment.value || '' },
+    });
+    if (res && res.code === 2000) {
+      ElMessage.success(res.msg || '审核完成');
+      emit('refresh');
+      emit('close');
+    } else {
+      ElMessage.error(res?.msg || '操作失败');
+    }
+  } catch (e: any) {
+    if (e !== 'cancel') ElMessage.error(e?.response?.data?.msg || e?.message || '操作失败');
+  }
+};
+
+// 媒体部复审通过
+const handleFinalReviewApprove = async () => {
+  try {
+    await ElMessageBox.confirm('确认复审通过？将创建上刊订单。', '确认操作', { type: 'success' });
+    const res = await request({
+      url: `/api/BookingOrderModelViewSet/${orderId.value}/final_review_approve/`,
+      method: 'post',
+      data: { review_comment: reviewComment.value || '' },
+    });
+    if (res && res.code === 2000) {
+      ElMessage.success(res.msg || '复审通过');
+      emit('refresh');
+      emit('close');
+    } else {
+      ElMessage.error(res?.msg || '操作失败');
+    }
+  } catch (e: any) {
+    if (e !== 'cancel') ElMessage.error(e?.response?.data?.msg || e?.message || '操作失败');
+  }
+};
+
+// 媒体部复审驳回
+const handleFinalReviewReject = async () => {
+  if (!reviewComment.value.trim()) {
+    ElMessage.warning('驳回时必须填写审核意见');
+    return;
+  }
+  try {
+    await ElMessageBox.confirm('确认驳回此订单？', '确认驳回', { type: 'warning' });
+    const res = await request({
+      url: `/api/BookingOrderModelViewSet/${orderId.value}/final_review_reject/`,
+      method: 'post',
+      data: { reject_reason: reviewComment.value },
+    });
+    if (res && res.code === 2000) {
+      ElMessage.success(res.msg || '已驳回');
+      emit('refresh');
+      emit('close');
+    } else {
+      ElMessage.error(res?.msg || '驳回失败');
+    }
+  } catch (e: any) {
+    if (e !== 'cancel') ElMessage.error(e?.response?.data?.msg || e?.message || '驳回失败');
   }
 };
 
@@ -1156,49 +1409,68 @@ const handleEditVehiclePositions = async (row: any) => {
 
 // 保存车位编辑
 const handleSavePosition = async () => {
-  // 验证车辆
   if (!editPositionForm.value.vehicle_id) {
     ElMessage.warning('请选择车辆');
     return;
   }
-  
+
   try {
     editPositionLoading.value = true;
-    
-    // 先获取当前记录的完整数据
+
+    // 如果是营运公司换车操作，使用专用接口
+    if (editPositionForm.value._isSwap) {
+      const res = await request({
+        url: `/api/BookingOrderModelViewSet/${orderId.value}/company_swap_vehicle/`,
+        method: 'post',
+        data: {
+          position_id: editPositionForm.value.id,
+          new_vehicle_id: editPositionForm.value.vehicle_id,
+          swap_reason: '营运公司换车',
+        },
+      });
+      if (res && res.code === 2000) {
+        ElMessage.success(res.msg || '换车成功');
+        editPositionDialogVisible.value = false;
+        await loadAllPositions();
+        return;
+      } else {
+        ElMessage.error(res?.msg || '换车失败');
+        return;
+      }
+    }
+
+    // 普通编辑模式
     const currentRes = await request({
       url: `/api/VehicleAdPositionModelViewSet/${editPositionForm.value.id}/`,
       method: 'get',
     });
-    
+
     if (!currentRes || !currentRes.data) {
       throw new Error('获取当前数据失败');
     }
-    
+
     const currentData = currentRes.data;
-    
-    // 获取选中的车辆信息
     const selectedVehicle = roadlineVehicles.value.find(
       (v: any) => v.id === editPositionForm.value.vehicle_id
     );
-    
-    // 使用 PUT 方法更新，需要提供所有必填字段
+
     await request({
       url: `/api/VehicleAdPositionModelViewSet/${editPositionForm.value.id}/`,
       method: 'put',
       data: {
-        ...currentData,  // 保留原有数据
+        ...currentData,
         vehicle_id: editPositionForm.value.vehicle_id,
-        vehicle_no: selectedVehicle?.vehicle_no || currentData.vehicle_no,  // 更新冗余字段
+        vehicle_no: selectedVehicle?.vehicle_no || currentData.vehicle_no,
       },
     });
-    
+
     ElMessage.success('保存成功');
     editPositionDialogVisible.value = false;
-    
-    // 重新加载车位列表
+
     if (selectedDetailId.value) {
       await loadPositions(selectedDetailId.value);
+    } else {
+      await loadAllPositions();
     }
   } catch (error: any) {
     console.error('保存车位失败:', error);

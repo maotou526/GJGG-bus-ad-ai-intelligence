@@ -7,6 +7,7 @@ LastEditors:
 LastEditTime: 2025-01-XX
 '''
 from django.db import models
+from django.conf import settings
 
 from dvadmin_twodev.baseentity.models import BaseDataModel
 from dvadmin_twodev.booking_manage.booking_order_detail.models import BookingOrderDetailModel
@@ -14,6 +15,7 @@ from dvadmin_twodev.basedata.roadline.models import RoadlineModel
 from dvadmin_twodev.basedata.company.models import CompanyModel
 from dvadmin_twodev.basedata.vehicle_ad_resource.models import VehicleAdResourceModel
 from dvadmin_twodev.basedata.vehicle.models import VehicleModel
+from dvadmin_twodev.basedata.media_type.models import AdMediaTypeModel
 from conf.env import CUS_TABLE_PREFIX
 
 
@@ -122,6 +124,39 @@ class VehicleAdPositionModel(BaseDataModel):
         db_comment="车辆自编号，冗余字段",
     )
 
+    # 媒体类型ID（可以是组合类型如"大三侧"或基础类型如"车头"）
+    media_type_id = models.ForeignKey(
+        AdMediaTypeModel,
+        on_delete=models.PROTECT,
+        db_column="media_type_id",
+        db_constraint=False,
+        null=True,
+        blank=True,
+        related_name="vehicle_ad_positions",
+        verbose_name="媒体类型ID",
+        help_text="关联AdMediaTypeModel，可以是组合类型（如大三侧）",
+        db_comment="媒体类型ID，关联媒体类型表",
+    )
+
+    # 媒体类型名称（冗余字段）
+    media_type_name = models.CharField(
+        max_length=64,
+        null=True,
+        blank=True,
+        verbose_name="媒体类型名称",
+        help_text="冗余字段，如大三侧、全车身、车头",
+        db_comment="媒体类型名称，冗余字段",
+    )
+
+    # 媒体资源详情（JSON）
+    media_json = models.JSONField(
+        null=True,
+        blank=True,
+        verbose_name="媒体资源详情",
+        help_text="存储占用的基础资源位信息JSON",
+        db_comment="媒体资源详情，存储占用的基础资源位信息JSON",
+    )
+
     # 预订开始日期
     reserved_start_date = models.DateField(
         null=False,
@@ -166,6 +201,48 @@ class VehicleAdPositionModel(BaseDataModel):
         verbose_name="分配状态",
         help_text="分配状态：1=已分配, 2=已上刊, 3=已下刊, 4=已取消",
         db_comment="分配状态：1=已分配, 2=已上刊, 3=已下刊, 4=已取消",
+    )
+
+    # 营运公司确认状态：1=待确认, 2=已确认, 3=已剔除
+    confirm_status = models.IntegerField(
+        null=False,
+        blank=False,
+        default=1,
+        verbose_name="营运公司确认状态",
+        help_text="营运公司确认状态：1=待确认, 2=已确认, 3=已剔除",
+        db_comment="营运公司确认状态：1=待确认, 2=已确认, 3=已剔除",
+    )
+
+    # 剔除原因
+    exclude_reason = models.TextField(
+        null=True,
+        blank=True,
+        verbose_name="剔除原因",
+        help_text="营运公司剔除时必填",
+        db_comment="剔除原因，营运公司剔除时必填",
+    )
+
+    # 确认人ID
+    confirm_user_id = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        db_column="confirm_user_id",
+        db_constraint=False,
+        null=True,
+        blank=True,
+        related_name="confirmed_positions",
+        verbose_name="确认人ID",
+        help_text="确认/剔除操作人",
+        db_comment="确认人ID，确认/剔除操作人",
+    )
+
+    # 确认时间
+    confirm_time = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="确认时间",
+        help_text="确认/剔除时间",
+        db_comment="确认时间，确认/剔除时间",
     )
 
     class Meta:

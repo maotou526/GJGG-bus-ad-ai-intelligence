@@ -1,16 +1,17 @@
 '''
 Description: 预订订单视图
-Version: 1.0
+Version: 2.0
 Autor: AI Assistant
 Date: 2025-01-XX
-LastEditors: 
-LastEditTime: 2025-02-02
+LastEditors:
+LastEditTime: 2026-02-08
 '''
 from typing import List, Dict
 from rest_framework.decorators import action
 from rest_framework import status
 from django.db import transaction
 from django.db.models import Q
+from django.utils import timezone
 
 from dvadmin.utils.viewset import CustomModelViewSet
 from dvadmin.utils.json_response import DetailResponse, SuccessResponse, ErrorResponse
@@ -25,10 +26,32 @@ from .serializers import (
 # 导入相关模型
 from dvadmin_twodev.booking_manage.booking_order_detail.models import BookingOrderDetailModel
 from dvadmin_twodev.booking_manage.vehicle_ad_position.models import VehicleAdPositionModel
+from dvadmin_twodev.booking_manage.vehicle_ad_position_change.models import VehicleAdPositionChangeModel
 from dvadmin_twodev.basedata.vehicle_ad_resource.models import VehicleAdResourceModel
 from dvadmin_twodev.basedata.vehicle.models import VehicleModel
 from dvadmin_twodev.basedata.media_type.models import AdMediaTypeModel
 from dvadmin_twodev.basedata.media_type_composition.models import AdMediaTypeCompositionModel
+
+# ==================== 状态常量 ====================
+# 预订单状态
+STATUS_DRAFT = 1              # 草稿
+STATUS_MEDIA_FIRST = 2        # 待媒体部初审
+STATUS_COMPANY_REVIEW = 3     # 待营运公司审核
+STATUS_MEDIA_FINAL = 4        # 待媒体部复审
+STATUS_APPROVED = 5           # 已通过
+STATUS_COMPLETED = 6          # 已完成
+STATUS_REJECTED = 7           # 已驳回
+STATUS_CANCELLED = 8          # 已取消
+
+# 审批节点
+NODE_MEDIA_FIRST = 1          # 媒体部初审
+NODE_COMPANY_REVIEW = 2       # 营运公司审核
+NODE_MEDIA_FINAL = 3          # 媒体部复审
+
+# 车位确认状态
+CONFIRM_PENDING = 1           # 待确认
+CONFIRM_CONFIRMED = 2         # 已确认
+CONFIRM_EXCLUDED = 3          # 已剔除
 
 
 class BookingOrderModelViewSet(CustomModelViewSet):
@@ -69,14 +92,16 @@ class BookingOrderModelViewSet(CustomModelViewSet):
     # 过滤字段(支持精确查询)
     filter_fields = [
         'id', 'booking_no', 'customer_id', 'customer_name',
-        'booking_type', 'booking_status', 'original_booking_id',
+        'booking_type', 'booking_status', 'current_approval_node',
+        'original_booking_id',
         'start_date', 'end_date', 'enabled_mark', 'delete_mark'
     ]
-    
+
     # filterset_fields 用于 DRF 的过滤后端
     filterset_fields = [
         'id', 'booking_no', 'customer_id', 'customer_name',
-        'booking_type', 'booking_status', 'original_booking_id',
+        'booking_type', 'booking_status', 'current_approval_node',
+        'original_booking_id',
         'start_date', 'end_date', 'enabled_mark', 'delete_mark'
     ]
     
@@ -271,6 +296,1031 @@ class BookingOrderModelViewSet(CustomModelViewSet):
                 code=500
             )
     
+    # ==================== 审批流程接口 ====================
+
+    @action(detail=True, methods=['post'], url_path='submit')
+    @transaction.atomic
+    def submit(self, request, pk=None):
+        """
+        提交预订单进入审批流程
+        草稿(1) → 待媒体部初审(2)
+
+        POST /api/BookingOrderModelViewSet/{id}/submit/
+        """
+        booking_order = self.get_object()
+
+        if booking_order.booking_status != STATUS_DRAFT:
+            return ErrorResponse(msg="只有草稿状态的预订单才能提交审批", code=400)
+
+        # 检查是否有明细
+        details = BookingOrderDetailModel.objects.filter(
+            booking_order_id=booking_order.id, delete_mark=0, enabled_mark=1
+        )
+        if not details.exists():
+            return ErrorResponse(msg="预订单没有明细数据，无法提交", code=400)
+
+        # 执行车位分配
+        result = self._allocate_positions_for_order(booking_order.id)
+        if not result['success']:
+            error_details = [f.get('reason', '未知错误') for f in result.get('failed_details', [])]
+            return ErrorResponse(
+                msg=f"车位分配失败，无法提交审批。\n\n{''.join(error_details)}",
+                code=400
+            )
+
+        # 更新状态
+        booking_order.booking_status = STATUS_MEDIA_FIRST
+        booking_order.current_approval_node = NODE_MEDIA_FIRST
+        booking_order.submitter_id = request.user
+        booking_order.submit_time = timezone.now()
+        # 清除可能的驳回信息
+        booking_order.reject_reason = None
+        booking_order.reject_node = None
+        booking_order.reject_user_id = None
+        booking_order.reject_time = None
+        booking_order.save()
+
+        return SuccessResponse(
+            data={'id': str(booking_order.id), 'booking_status': STATUS_MEDIA_FIRST, 'allocation_result': result},
+            msg=f"提交成功，{result['message']}，等待媒体部初审"
+        )
+
+    @action(detail=True, methods=['post'], url_path='first_review_approve')
+    @transaction.atomic
+    def first_review_approve(self, request, pk=None):
+        """
+        媒体部初审通过
+        待媒体部初审(2) → 待营运公司审核(3)
+
+        POST /api/BookingOrderModelViewSet/{id}/first_review_approve/
+        请求体: {"review_comment": "审核意见"}
+        """
+        booking_order = self.get_object()
+
+        if booking_order.booking_status != STATUS_MEDIA_FIRST:
+            return ErrorResponse(msg="当前状态不是待媒体部初审，无法操作", code=400)
+
+        review_comment = request.data.get('review_comment', '')
+
+        # 重置所有车位的确认状态为"待确认"
+        positions = VehicleAdPositionModel.objects.filter(
+            booking_detail_id__booking_order_id=booking_order.id,
+            delete_mark=0, enabled_mark=1, allocation_status=1
+        )
+        positions.update(confirm_status=CONFIRM_PENDING, confirm_user_id=None, confirm_time=None, exclude_reason=None)
+
+        # 更新订单状态
+        booking_order.booking_status = STATUS_COMPANY_REVIEW
+        booking_order.current_approval_node = NODE_COMPANY_REVIEW
+        if review_comment:
+            booking_order.remark = (booking_order.remark or '') + f"\n[媒体部初审意见] {review_comment}"
+        booking_order.save()
+
+        return SuccessResponse(
+            data={'id': str(booking_order.id), 'booking_status': STATUS_COMPANY_REVIEW},
+            msg="媒体部初审通过，已转营运公司审核"
+        )
+
+    @action(detail=True, methods=['post'], url_path='first_review_reject')
+    @transaction.atomic
+    def first_review_reject(self, request, pk=None):
+        """
+        媒体部初审驳回
+        待媒体部初审(2) → 已驳回(7)
+
+        POST /api/BookingOrderModelViewSet/{id}/first_review_reject/
+        请求体: {"reject_reason": "驳回原因"}（必填）
+        """
+        booking_order = self.get_object()
+
+        if booking_order.booking_status != STATUS_MEDIA_FIRST:
+            return ErrorResponse(msg="当前状态不是待媒体部初审，无法驳回", code=400)
+
+        reject_reason = request.data.get('reject_reason', '')
+        if not reject_reason:
+            return ErrorResponse(msg="驳回原因不能为空", code=400)
+
+        # 释放车位
+        self._release_positions_for_order(booking_order.id)
+
+        # 更新状态
+        booking_order.booking_status = STATUS_REJECTED
+        booking_order.current_approval_node = None
+        booking_order.reject_reason = reject_reason
+        booking_order.reject_node = NODE_MEDIA_FIRST
+        booking_order.reject_user_id = request.user
+        booking_order.reject_time = timezone.now()
+        booking_order.save()
+
+        return SuccessResponse(
+            data={'id': str(booking_order.id), 'booking_status': STATUS_REJECTED},
+            msg="已驳回"
+        )
+
+    @action(detail=True, methods=['post'], url_path='company_confirm_position')
+    @transaction.atomic
+    def company_confirm_position(self, request, pk=None):
+        """
+        营运公司确认单个车位
+
+        POST /api/BookingOrderModelViewSet/{id}/company_confirm_position/
+        请求体: {"position_id": "uuid"}
+        """
+        booking_order = self.get_object()
+
+        if booking_order.booking_status != STATUS_COMPANY_REVIEW:
+            return ErrorResponse(msg="当前状态不是待营运公司审核，无法操作", code=400)
+
+        position_id = request.data.get('position_id')
+        if not position_id:
+            return ErrorResponse(msg="position_id 不能为空", code=400)
+
+        try:
+            position = VehicleAdPositionModel.objects.get(
+                id=position_id,
+                booking_detail_id__booking_order_id=booking_order.id,
+                delete_mark=0, enabled_mark=1
+            )
+        except VehicleAdPositionModel.DoesNotExist:
+            return ErrorResponse(msg="车位记录不存在或不属于该预订单", code=404)
+
+        if position.confirm_status != CONFIRM_PENDING:
+            return ErrorResponse(msg="该车位已经处理过，无法重复操作", code=400)
+
+        position.confirm_status = CONFIRM_CONFIRMED
+        position.confirm_user_id = request.user
+        position.confirm_time = timezone.now()
+        position.save()
+
+        return SuccessResponse(
+            data={'position_id': str(position.id), 'confirm_status': CONFIRM_CONFIRMED},
+            msg="车位已确认"
+        )
+
+    @action(detail=True, methods=['post'], url_path='company_exclude_position')
+    @transaction.atomic
+    def company_exclude_position(self, request, pk=None):
+        """
+        营运公司剔除车位
+
+        POST /api/BookingOrderModelViewSet/{id}/company_exclude_position/
+        请求体: {"position_id": "uuid", "exclude_reason": "剔除原因"}（原因必填）
+        """
+        booking_order = self.get_object()
+
+        if booking_order.booking_status != STATUS_COMPANY_REVIEW:
+            return ErrorResponse(msg="当前状态不是待营运公司审核，无法操作", code=400)
+
+        position_id = request.data.get('position_id')
+        exclude_reason = request.data.get('exclude_reason', '')
+
+        if not position_id:
+            return ErrorResponse(msg="position_id 不能为空", code=400)
+        if not exclude_reason:
+            return ErrorResponse(msg="剔除原因不能为空", code=400)
+
+        try:
+            position = VehicleAdPositionModel.objects.get(
+                id=position_id,
+                booking_detail_id__booking_order_id=booking_order.id,
+                delete_mark=0, enabled_mark=1
+            )
+        except VehicleAdPositionModel.DoesNotExist:
+            return ErrorResponse(msg="车位记录不存在或不属于该预订单", code=404)
+
+        if position.confirm_status == CONFIRM_EXCLUDED:
+            return ErrorResponse(msg="该车位已剔除，无法重复操作", code=400)
+
+        # 记录变更历史
+        import json
+        before_data = {
+            'vehicle_id': str(position.vehicle_id_id),
+            'vehicle_no': position.vehicle_no,
+            'confirm_status': position.confirm_status,
+        }
+
+        position.confirm_status = CONFIRM_EXCLUDED
+        position.exclude_reason = exclude_reason
+        position.confirm_user_id = request.user
+        position.confirm_time = timezone.now()
+        position.allocation_status = 4  # 已取消
+        position.save()
+
+        # 释放对应资源位
+        if position.resource_id:
+            resource = position.resource_id
+            resource.resource_status = 1  # 空闲
+            resource.save()
+
+        after_data = {
+            'vehicle_id': str(position.vehicle_id_id),
+            'vehicle_no': position.vehicle_no,
+            'confirm_status': CONFIRM_EXCLUDED,
+            'exclude_reason': exclude_reason,
+        }
+
+        VehicleAdPositionChangeModel.objects.create(
+            booking_order_id=booking_order,
+            booking_detail_id=position.booking_detail_id,
+            action_type=2,  # 删除车位
+            position_id=position,
+            roadline_id=position.roadline_id,
+            roadline_name=position.roadline_name,
+            roadline_company_id=position.roadline_company_id,
+            roadline_company_name=position.roadline_company_name,
+            vehicle_id=position.vehicle_id,
+            vehicle_no=position.vehicle_no,
+            resource_id=position.resource_id,
+            before_data=json.dumps(before_data, ensure_ascii=False),
+            after_data=json.dumps(after_data, ensure_ascii=False),
+            change_reason=f"营运公司剔除：{exclude_reason}",
+            change_node=str(NODE_COMPANY_REVIEW),
+            operator_id=request.user,
+            operation_time=timezone.now(),
+        )
+
+        return SuccessResponse(
+            data={'position_id': str(position.id), 'confirm_status': CONFIRM_EXCLUDED},
+            msg="车位已剔除"
+        )
+
+    @action(detail=True, methods=['post'], url_path='company_swap_vehicle')
+    @transaction.atomic
+    def company_swap_vehicle(self, request, pk=None):
+        """
+        营运公司换车（替换某个车位的车辆）
+
+        POST /api/BookingOrderModelViewSet/{id}/company_swap_vehicle/
+        请求体: {"position_id": "uuid", "new_vehicle_id": "uuid", "swap_reason": "换车原因"}
+        """
+        booking_order = self.get_object()
+
+        if booking_order.booking_status != STATUS_COMPANY_REVIEW:
+            return ErrorResponse(msg="当前状态不是待营运公司审核，无法操作", code=400)
+
+        position_id = request.data.get('position_id')
+        new_vehicle_id = request.data.get('new_vehicle_id')
+        swap_reason = request.data.get('swap_reason', '营运公司换车')
+
+        if not position_id or not new_vehicle_id:
+            return ErrorResponse(msg="position_id 和 new_vehicle_id 不能为空", code=400)
+
+        try:
+            position = VehicleAdPositionModel.objects.get(
+                id=position_id,
+                booking_detail_id__booking_order_id=booking_order.id,
+                delete_mark=0, enabled_mark=1
+            )
+        except VehicleAdPositionModel.DoesNotExist:
+            return ErrorResponse(msg="车位记录不存在或不属于该预订单", code=404)
+
+        try:
+            new_vehicle = VehicleModel.objects.get(id=new_vehicle_id, delete_mark=0, enabled_mark=1)
+        except VehicleModel.DoesNotExist:
+            return ErrorResponse(msg="新车辆不存在", code=404)
+
+        # 冲突检测：检查新车辆在该时间段是否有冲突
+        base_media_type_id = position.resource_id.base_media_type_id if position.resource_id else None
+        if base_media_type_id:
+            conflicts = VehicleAdPositionModel.objects.filter(
+                vehicle_id=new_vehicle,
+                resource_id__base_media_type_id=base_media_type_id,
+                delete_mark=0, enabled_mark=1,
+                allocation_status__in=[1, 2],
+            ).filter(
+                Q(reserved_start_date__lte=position.reserved_end_date) &
+                Q(reserved_end_date__gte=position.reserved_start_date)
+            ).exclude(id=position.id)
+
+            if conflicts.exists():
+                return ErrorResponse(msg="新车辆在该时间段已有其他广告分配，存在冲突", code=400)
+
+        # 记录变更前数据
+        import json
+        before_data = {
+            'vehicle_id': str(position.vehicle_id_id),
+            'vehicle_no': position.vehicle_no,
+        }
+
+        # 释放旧资源位
+        old_resource = position.resource_id
+        if old_resource:
+            old_resource.resource_status = 1  # 空闲
+            old_resource.save()
+
+        # 创建新资源位
+        new_resource = self._get_or_create_resource(
+            vehicle_id=new_vehicle.id,
+            base_media_type_id=base_media_type_id.id if hasattr(base_media_type_id, 'id') else base_media_type_id,
+            start_date=position.reserved_start_date,
+            end_date=position.reserved_end_date
+        )
+        new_resource.resource_status = 2  # 预订
+        new_resource.save()
+
+        # 更新车位记录
+        position.vehicle_id = new_vehicle
+        position.vehicle_no = new_vehicle.vehicle_no
+        position.resource_id = new_resource
+        position.confirm_status = CONFIRM_CONFIRMED
+        position.confirm_user_id = request.user
+        position.confirm_time = timezone.now()
+        position.save()
+
+        after_data = {
+            'vehicle_id': str(new_vehicle.id),
+            'vehicle_no': new_vehicle.vehicle_no,
+        }
+
+        # 记录变更历史
+        VehicleAdPositionChangeModel.objects.create(
+            booking_order_id=booking_order,
+            booking_detail_id=position.booking_detail_id,
+            action_type=3,  # 修改车位
+            position_id=position,
+            roadline_id=position.roadline_id,
+            roadline_name=position.roadline_name,
+            roadline_company_id=position.roadline_company_id,
+            roadline_company_name=position.roadline_company_name,
+            vehicle_id=new_vehicle,
+            vehicle_no=new_vehicle.vehicle_no,
+            resource_id=new_resource,
+            before_data=json.dumps(before_data, ensure_ascii=False),
+            after_data=json.dumps(after_data, ensure_ascii=False),
+            change_reason=f"营运公司换车：{swap_reason}",
+            change_node=str(NODE_COMPANY_REVIEW),
+            operator_id=request.user,
+            operation_time=timezone.now(),
+        )
+
+        return SuccessResponse(
+            data={'position_id': str(position.id), 'new_vehicle_no': new_vehicle.vehicle_no},
+            msg=f"换车成功：{before_data['vehicle_no']} → {new_vehicle.vehicle_no}"
+        )
+
+    @action(detail=True, methods=['post'], url_path='company_batch_confirm')
+    @transaction.atomic
+    def company_batch_confirm(self, request, pk=None):
+        """
+        营运公司批量确认（确认该公司所有待确认车位）
+
+        POST /api/BookingOrderModelViewSet/{id}/company_batch_confirm/
+        请求体: {"company_id": "uuid"}（可选，不传则确认全部待确认车位）
+        """
+        booking_order = self.get_object()
+
+        if booking_order.booking_status != STATUS_COMPANY_REVIEW:
+            return ErrorResponse(msg="当前状态不是待营运公司审核，无法操作", code=400)
+
+        company_id = request.data.get('company_id')
+        positions = VehicleAdPositionModel.objects.filter(
+            booking_detail_id__booking_order_id=booking_order.id,
+            delete_mark=0, enabled_mark=1,
+            confirm_status=CONFIRM_PENDING
+        )
+
+        if company_id:
+            positions = positions.filter(roadline_company_id=company_id)
+
+        count = positions.update(
+            confirm_status=CONFIRM_CONFIRMED,
+            confirm_user_id=request.user,
+            confirm_time=timezone.now()
+        )
+
+        return SuccessResponse(
+            data={'confirmed_count': count},
+            msg=f"批量确认成功，共确认 {count} 个车位"
+        )
+
+    @action(detail=True, methods=['post'], url_path='company_review_complete')
+    @transaction.atomic
+    def company_review_complete(self, request, pk=None):
+        """
+        营运公司审核完成（所有车位都已确认/剔除后可触发）
+        待营运公司审核(3) → 待媒体部复审(4)
+
+        POST /api/BookingOrderModelViewSet/{id}/company_review_complete/
+        请求体: {"review_comment": "审核意见"}
+        """
+        booking_order = self.get_object()
+
+        if booking_order.booking_status != STATUS_COMPANY_REVIEW:
+            return ErrorResponse(msg="当前状态不是待营运公司审核，无法操作", code=400)
+
+        # 检查是否还有待确认的车位
+        pending_count = VehicleAdPositionModel.objects.filter(
+            booking_detail_id__booking_order_id=booking_order.id,
+            delete_mark=0, enabled_mark=1,
+            allocation_status=1,  # 已分配
+            confirm_status=CONFIRM_PENDING
+        ).count()
+
+        if pending_count > 0:
+            return ErrorResponse(msg=f"还有 {pending_count} 个车位未处理（确认/剔除），无法完成审核", code=400)
+
+        review_comment = request.data.get('review_comment', '')
+
+        booking_order.booking_status = STATUS_MEDIA_FINAL
+        booking_order.current_approval_node = NODE_MEDIA_FINAL
+        if review_comment:
+            booking_order.remark = (booking_order.remark or '') + f"\n[营运公司审核意见] {review_comment}"
+        booking_order.save()
+
+        return SuccessResponse(
+            data={'id': str(booking_order.id), 'booking_status': STATUS_MEDIA_FINAL},
+            msg="营运公司审核完成，已转媒体部复审"
+        )
+
+    @action(detail=True, methods=['post'], url_path='final_review_approve')
+    @transaction.atomic
+    def final_review_approve(self, request, pk=None):
+        """
+        媒体部复审通过（创建上刊订单）
+        待媒体部复审(4) → 已通过(5)
+
+        POST /api/BookingOrderModelViewSet/{id}/final_review_approve/
+        请求体: {"review_comment": "审核意见"}
+        """
+        booking_order = self.get_object()
+
+        if booking_order.booking_status != STATUS_MEDIA_FINAL:
+            return ErrorResponse(msg="当前状态不是待媒体部复审，无法操作", code=400)
+
+        review_comment = request.data.get('review_comment', '')
+
+        # 更新状态
+        booking_order.booking_status = STATUS_APPROVED
+        booking_order.current_approval_node = None
+        booking_order.approved_time = timezone.now()
+        if review_comment:
+            booking_order.remark = (booking_order.remark or '') + f"\n[媒体部复审意见] {review_comment}"
+        booking_order.save()
+
+        # 创建上刊订单
+        on_air_result = self._create_on_air_order(booking_order, request)
+
+        msg = "媒体部复审通过"
+        if on_air_result.get('success'):
+            msg += f"，已创建上刊订单（{on_air_result.get('order_no', '')}）"
+
+        return SuccessResponse(
+            data={
+                'id': str(booking_order.id),
+                'booking_status': STATUS_APPROVED,
+                'on_air_result': on_air_result
+            },
+            msg=msg
+        )
+
+    @action(detail=True, methods=['post'], url_path='final_review_reject')
+    @transaction.atomic
+    def final_review_reject(self, request, pk=None):
+        """
+        媒体部复审驳回
+        待媒体部复审(4) → 已驳回(7)
+
+        POST /api/BookingOrderModelViewSet/{id}/final_review_reject/
+        请求体: {"reject_reason": "驳回原因"}（必填）
+        """
+        booking_order = self.get_object()
+
+        if booking_order.booking_status != STATUS_MEDIA_FINAL:
+            return ErrorResponse(msg="当前状态不是待媒体部复审，无法驳回", code=400)
+
+        reject_reason = request.data.get('reject_reason', '')
+        if not reject_reason:
+            return ErrorResponse(msg="驳回原因不能为空", code=400)
+
+        # 释放车位
+        self._release_positions_for_order(booking_order.id)
+
+        booking_order.booking_status = STATUS_REJECTED
+        booking_order.current_approval_node = None
+        booking_order.reject_reason = reject_reason
+        booking_order.reject_node = NODE_MEDIA_FINAL
+        booking_order.reject_user_id = request.user
+        booking_order.reject_time = timezone.now()
+        booking_order.save()
+
+        return SuccessResponse(
+            data={'id': str(booking_order.id), 'booking_status': STATUS_REJECTED},
+            msg="已驳回"
+        )
+
+    @action(detail=True, methods=['post'], url_path='resubmit')
+    @transaction.atomic
+    def resubmit(self, request, pk=None):
+        """
+        驳回后重新发起（基于被驳回的订单创建新订单）
+        已驳回(7) → 草稿(1)
+
+        POST /api/BookingOrderModelViewSet/{id}/resubmit/
+        """
+        original_order = self.get_object()
+
+        if original_order.booking_status != STATUS_REJECTED:
+            return ErrorResponse(msg="只有已驳回的预订单才能重新发起", code=400)
+
+        from datetime import datetime
+        import random
+
+        # 生成新订单号
+        date_str = datetime.now().strftime('%Y%m%d')
+        while True:
+            random_str = str(random.randint(1000, 9999))
+            new_booking_no = f"BK-{date_str}-{random_str}"
+            if not BookingOrderModel.objects.filter(booking_no=new_booking_no).exists():
+                break
+
+        # 创建新订单（复制原订单数据）
+        new_order = BookingOrderModel.objects.create(
+            booking_no=new_booking_no,
+            customer_id=original_order.customer_id,
+            customer_name=original_order.customer_name,
+            booking_type=4,  # 重新发起
+            original_booking_id=original_order,
+            booking_status=STATUS_DRAFT,
+            current_approval_node=None,
+            ad_content=original_order.ad_content,
+            start_date=original_order.start_date,
+            end_date=original_order.end_date,
+            total_amount=original_order.total_amount,
+            remark=f"重新发起自：{original_order.booking_no}",
+            creator=request.user,
+            creator_name=request.user.name if hasattr(request.user, 'name') else str(request.user),
+        )
+
+        # 复制明细数据
+        original_details = BookingOrderDetailModel.objects.filter(
+            booking_order_id=original_order.id, delete_mark=0, enabled_mark=1
+        )
+
+        for detail in original_details:
+            BookingOrderDetailModel.objects.create(
+                booking_order_id=new_order,
+                roadline_id=detail.roadline_id,
+                roadline_name=detail.roadline_name,
+                roadline_company_id=detail.roadline_company_id,
+                roadline_company_name=detail.roadline_company_name,
+                media_type_id=detail.media_type_id,
+                media_type_name=detail.media_type_name,
+                is_composite=detail.is_composite,
+                quantity=detail.quantity,
+                unit_price=detail.unit_price,
+                subtotal_amount=detail.subtotal_amount,
+                start_date=detail.start_date,
+                end_date=detail.end_date,
+                lock_status=1,  # 未锁定
+                creator=request.user,
+                creator_name=request.user.name if hasattr(request.user, 'name') else str(request.user),
+            )
+
+        return SuccessResponse(
+            data={
+                'id': str(new_order.id),
+                'booking_no': new_order.booking_no,
+                'original_booking_no': original_order.booking_no,
+            },
+            msg=f"重新发起成功，新订单号：{new_order.booking_no}，请编辑后提交审批"
+        )
+
+    @action(detail=True, methods=['post'], url_path='cancel')
+    @transaction.atomic
+    def cancel(self, request, pk=None):
+        """
+        取消预订单
+
+        POST /api/BookingOrderModelViewSet/{id}/cancel/
+        请求体: {"cancel_reason": "取消原因"}
+        """
+        booking_order = self.get_object()
+
+        if booking_order.booking_status in [STATUS_APPROVED, STATUS_COMPLETED, STATUS_CANCELLED]:
+            return ErrorResponse(msg="已通过/已完成/已取消的订单无法取消", code=400)
+
+        cancel_reason = request.data.get('cancel_reason', '')
+
+        # 释放车位
+        if booking_order.booking_status in [STATUS_MEDIA_FIRST, STATUS_COMPANY_REVIEW, STATUS_MEDIA_FINAL]:
+            self._release_positions_for_order(booking_order.id)
+
+        booking_order.booking_status = STATUS_CANCELLED
+        booking_order.current_approval_node = None
+        if cancel_reason:
+            booking_order.remark = (booking_order.remark or '') + f"\n[取消原因] {cancel_reason}"
+        booking_order.save()
+
+        return SuccessResponse(
+            data={'id': str(booking_order.id), 'booking_status': STATUS_CANCELLED},
+            msg="预订单已取消"
+        )
+
+    @action(detail=True, methods=['get'], url_path='get_available_actions')
+    def get_available_actions(self, request, pk=None):
+        """
+        获取当前用户对该预订单可执行的操作列表
+
+        GET /api/BookingOrderModelViewSet/{id}/get_available_actions/
+
+        返回按照 booking_status 和 current_approval_node 可执行的操作：
+        - edit: 编辑
+        - submit: 提交审批
+        - first_review_approve: 媒体部初审通过
+        - first_review_reject: 媒体部初审驳回
+        - company_confirm: 营运公司确认/剔除/换车
+        - company_review_complete: 营运公司审核完成
+        - final_review_approve: 媒体部复审通过
+        - final_review_reject: 媒体部复审驳回
+        - resubmit: 重新发起
+        - cancel: 取消
+        """
+        booking_order = self.get_object()
+        actions = []
+        bs = booking_order.booking_status
+
+        if bs == STATUS_DRAFT:
+            actions.extend(['edit', 'submit', 'cancel'])
+        elif bs == STATUS_MEDIA_FIRST:
+            actions.extend(['first_review_approve', 'first_review_reject', 'cancel'])
+        elif bs == STATUS_COMPANY_REVIEW:
+            actions.extend(['company_confirm', 'company_review_complete', 'cancel'])
+        elif bs == STATUS_MEDIA_FINAL:
+            actions.extend(['final_review_approve', 'final_review_reject', 'cancel'])
+        elif bs == STATUS_REJECTED:
+            actions.extend(['resubmit'])
+
+        # 获取审批进度统计
+        stats = {}
+        if bs == STATUS_COMPANY_REVIEW:
+            all_positions = VehicleAdPositionModel.objects.filter(
+                booking_detail_id__booking_order_id=booking_order.id,
+                delete_mark=0, enabled_mark=1, allocation_status=1
+            )
+            stats = {
+                'total': all_positions.count(),
+                'confirmed': all_positions.filter(confirm_status=CONFIRM_CONFIRMED).count(),
+                'excluded': all_positions.filter(confirm_status=CONFIRM_EXCLUDED).count(),
+                'pending': all_positions.filter(confirm_status=CONFIRM_PENDING).count(),
+            }
+
+        return SuccessResponse(
+            data={
+                'id': str(booking_order.id),
+                'booking_status': bs,
+                'current_approval_node': booking_order.current_approval_node,
+                'actions': actions,
+                'position_stats': stats,
+            }
+        )
+
+    @action(detail=True, methods=['post'], url_path='review_add_position')
+    @transaction.atomic
+    def review_add_position(self, request, pk=None):
+        """
+        审批过程中新增车位（媒体部初审/复审可操作）
+
+        POST /api/BookingOrderModelViewSet/{id}/review_add_position/
+        请求体: {
+            "booking_detail_id": "uuid",
+            "vehicle_id": "uuid",
+            "reason": "新增原因"
+        }
+        """
+        booking_order = self.get_object()
+
+        if booking_order.booking_status not in [STATUS_MEDIA_FIRST, STATUS_MEDIA_FINAL]:
+            return ErrorResponse(msg="只有媒体部初审/复审阶段可以新增车位", code=400)
+
+        detail_id = request.data.get('booking_detail_id')
+        vehicle_id = request.data.get('vehicle_id')
+        reason = request.data.get('reason', '审批中新增')
+
+        if not detail_id or not vehicle_id:
+            return ErrorResponse(msg="booking_detail_id 和 vehicle_id 不能为空", code=400)
+
+        try:
+            detail = BookingOrderDetailModel.objects.get(
+                id=detail_id, booking_order_id=booking_order.id, delete_mark=0
+            )
+        except BookingOrderDetailModel.DoesNotExist:
+            return ErrorResponse(msg="明细不存在", code=404)
+
+        try:
+            vehicle = VehicleModel.objects.get(id=vehicle_id, delete_mark=0, enabled_mark=1)
+        except VehicleModel.DoesNotExist:
+            return ErrorResponse(msg="车辆不存在", code=404)
+
+        # 确定基础媒体类型
+        if detail.is_composite:
+            compositions = AdMediaTypeCompositionModel.objects.filter(
+                composite_type_id=detail.media_type_id.id, delete_mark=0, enabled_mark=1
+            )
+            base_types = AdMediaTypeModel.objects.filter(
+                id__in=[c.component_type_id for c in compositions], delete_mark=0, enabled_mark=1
+            )
+        else:
+            base_types = [detail.media_type_id]
+
+        # 冲突检测
+        for bt in base_types:
+            bt_id = bt.id if hasattr(bt, 'id') else bt
+            conflicts = VehicleAdPositionModel.objects.filter(
+                vehicle_id=vehicle,
+                resource_id__base_media_type_id=bt_id,
+                delete_mark=0, enabled_mark=1,
+                allocation_status__in=[1, 2],
+            ).filter(
+                Q(reserved_start_date__lte=detail.end_date) &
+                Q(reserved_end_date__gte=detail.start_date)
+            )
+            if conflicts.exists():
+                return ErrorResponse(
+                    msg=f"车辆 {vehicle.vehicle_no} 在该时间段的 {bt.media_name if hasattr(bt, 'media_name') else bt_id} 资源位已有冲突",
+                    code=400
+                )
+
+        # 创建车位记录
+        import json
+        created_positions = []
+        for bt in base_types:
+            bt_id = bt.id if hasattr(bt, 'id') else bt
+            resource = self._get_or_create_resource(
+                vehicle_id=vehicle.id, base_media_type_id=bt_id,
+                start_date=detail.start_date, end_date=detail.end_date
+            )
+            resource.resource_status = 2
+            resource.save()
+
+            position = VehicleAdPositionModel.objects.create(
+                booking_detail_id=detail,
+                roadline_id=detail.roadline_id,
+                roadline_name=detail.roadline_name,
+                roadline_company_id=detail.roadline_company_id,
+                roadline_company_name=detail.roadline_company_name,
+                resource_id=resource,
+                vehicle_id=vehicle,
+                vehicle_no=vehicle.vehicle_no,
+                media_type_id=detail.media_type_id,
+                media_type_name=detail.media_type_name,
+                reserved_start_date=detail.start_date,
+                reserved_end_date=detail.end_date,
+                allocation_status=1,
+                confirm_status=CONFIRM_PENDING,
+                creator=request.user,
+                creator_name=request.user.name if hasattr(request.user, 'name') else str(request.user),
+            )
+            created_positions.append(position)
+
+        # 记录变更
+        change_node = str(NODE_MEDIA_FIRST) if booking_order.booking_status == STATUS_MEDIA_FIRST else str(NODE_MEDIA_FINAL)
+        for pos in created_positions:
+            VehicleAdPositionChangeModel.objects.create(
+                booking_order_id=booking_order,
+                booking_detail_id=detail,
+                action_type=1,  # 新增
+                position_id=pos,
+                roadline_id=pos.roadline_id,
+                roadline_name=pos.roadline_name,
+                roadline_company_id=pos.roadline_company_id,
+                roadline_company_name=pos.roadline_company_name,
+                vehicle_id=vehicle,
+                vehicle_no=vehicle.vehicle_no,
+                resource_id=pos.resource_id,
+                after_data=json.dumps({'vehicle_no': vehicle.vehicle_no}, ensure_ascii=False),
+                change_reason=reason,
+                change_node=change_node,
+                operator_id=request.user,
+                operation_time=timezone.now(),
+            )
+
+        return SuccessResponse(
+            data={'created_count': len(created_positions)},
+            msg=f"成功新增 {len(created_positions)} 个车位"
+        )
+
+    @action(detail=True, methods=['post'], url_path='review_remove_position')
+    @transaction.atomic
+    def review_remove_position(self, request, pk=None):
+        """
+        审批过程中删除车位（媒体部初审/复审可操作）
+
+        POST /api/BookingOrderModelViewSet/{id}/review_remove_position/
+        请求体: {"position_id": "uuid", "reason": "删除原因"}
+        """
+        booking_order = self.get_object()
+
+        if booking_order.booking_status not in [STATUS_MEDIA_FIRST, STATUS_MEDIA_FINAL]:
+            return ErrorResponse(msg="只有媒体部初审/复审阶段可以删除车位", code=400)
+
+        position_id = request.data.get('position_id')
+        reason = request.data.get('reason', '审批中删除')
+
+        if not position_id:
+            return ErrorResponse(msg="position_id 不能为空", code=400)
+
+        try:
+            position = VehicleAdPositionModel.objects.get(
+                id=position_id,
+                booking_detail_id__booking_order_id=booking_order.id,
+                delete_mark=0, enabled_mark=1
+            )
+        except VehicleAdPositionModel.DoesNotExist:
+            return ErrorResponse(msg="车位记录不存在", code=404)
+
+        import json
+        before_data = {
+            'vehicle_id': str(position.vehicle_id_id),
+            'vehicle_no': position.vehicle_no,
+        }
+
+        # 释放资源位
+        if position.resource_id:
+            position.resource_id.resource_status = 1
+            position.resource_id.save()
+
+        # 软删除车位
+        position.delete_mark = 1
+        position.allocation_status = 4
+        position.save()
+
+        change_node = str(NODE_MEDIA_FIRST) if booking_order.booking_status == STATUS_MEDIA_FIRST else str(NODE_MEDIA_FINAL)
+        VehicleAdPositionChangeModel.objects.create(
+            booking_order_id=booking_order,
+            booking_detail_id=position.booking_detail_id,
+            action_type=2,
+            position_id=position,
+            roadline_id=position.roadline_id,
+            roadline_name=position.roadline_name,
+            roadline_company_id=position.roadline_company_id,
+            roadline_company_name=position.roadline_company_name,
+            vehicle_id=position.vehicle_id,
+            vehicle_no=position.vehicle_no,
+            resource_id=position.resource_id,
+            before_data=json.dumps(before_data, ensure_ascii=False),
+            change_reason=reason,
+            change_node=change_node,
+            operator_id=request.user,
+            operation_time=timezone.now(),
+        )
+
+        return SuccessResponse(
+            data={'position_id': str(position.id)},
+            msg="车位已删除"
+        )
+
+    @action(detail=True, methods=['get'], url_path='get_positions_by_company')
+    def get_positions_by_company(self, request, pk=None):
+        """
+        按营运公司分组获取车位列表（营运公司审核页面使用）
+
+        GET /api/BookingOrderModelViewSet/{id}/get_positions_by_company/
+        """
+        booking_order = self.get_object()
+
+        positions = VehicleAdPositionModel.objects.filter(
+            booking_detail_id__booking_order_id=booking_order.id,
+            delete_mark=0, enabled_mark=1, allocation_status=1
+        ).select_related('roadline_id', 'roadline_company_id', 'vehicle_id', 'resource_id')
+
+        from dvadmin_twodev.booking_manage.vehicle_ad_position.serializers import VehicleAdPositionModelListSerializer
+
+        # 按营运公司分组
+        company_groups = {}
+        for pos in positions:
+            company_id = str(pos.roadline_company_id_id) if pos.roadline_company_id else 'unknown'
+            company_name = pos.roadline_company_name or '未知公司'
+            if company_id not in company_groups:
+                company_groups[company_id] = {
+                    'company_id': company_id,
+                    'company_name': company_name,
+                    'positions': [],
+                    'stats': {'total': 0, 'confirmed': 0, 'excluded': 0, 'pending': 0},
+                }
+            group = company_groups[company_id]
+            group['positions'].append(VehicleAdPositionModelListSerializer(pos).data)
+            group['stats']['total'] += 1
+            if pos.confirm_status == CONFIRM_CONFIRMED:
+                group['stats']['confirmed'] += 1
+            elif pos.confirm_status == CONFIRM_EXCLUDED:
+                group['stats']['excluded'] += 1
+            else:
+                group['stats']['pending'] += 1
+
+        return SuccessResponse(
+            data={
+                'company_groups': list(company_groups.values()),
+                'booking_status': booking_order.booking_status,
+            }
+        )
+
+    # ==================== 上刊订单创建辅助方法 ====================
+
+    def _create_on_air_order(self, booking_order, request):
+        """创建上刊订单（从 final_review_approve 调用）"""
+        from datetime import datetime
+        import random
+
+        try:
+            from dvadmin_twodev.airing_manage.on_air_order.models import OnAirOrderModel
+            from dvadmin_twodev.airing_manage.on_air_order_detail.models import OnAirOrderDetailModel
+            from dvadmin_twodev.airing_manage.on_air_order.serializers import OnAirOrderModelCreateSerializer
+            from dvadmin_twodev.airing_manage.on_air_order_detail.serializers import OnAirOrderDetailModelCreateSerializer
+        except ImportError:
+            return {'success': False, 'message': '上刊订单模块未安装'}
+
+        # 检查是否已有上刊订单
+        existing = OnAirOrderModel.objects.filter(booking_order_id=booking_order.id, delete_mark=0).first()
+        if existing:
+            return {'success': True, 'order_no': existing.order_no, 'message': '上刊订单已存在'}
+
+        # 生成订单号
+        date_str = datetime.now().strftime('%Y%m%d')
+        while True:
+            random_str = str(random.randint(1000, 9999))
+            order_no = f"ON-{date_str}-{random_str}"
+            if not OnAirOrderModel.objects.filter(order_no=order_no).exists():
+                break
+
+        # 获取日期范围
+        details = BookingOrderDetailModel.objects.filter(
+            booking_order_id=booking_order.id, delete_mark=0, enabled_mark=1
+        )
+        start_dates = [d.start_date for d in details if d.start_date]
+        end_dates = [d.end_date for d in details if d.end_date]
+
+        if not start_dates or not end_dates:
+            return {'success': False, 'message': '明细缺少日期信息'}
+
+        # 创建上刊订单
+        on_air_order_data = {
+            'order_no': order_no,
+            'booking_order_id': booking_order.id,
+            'customer_name': booking_order.customer_name or '',
+            'booking_start_date': min(start_dates),
+            'booking_end_date': max(end_dates),
+            'order_status': 4,
+            'approved_time': timezone.now(),
+            'remark': booking_order.remark or '',
+        }
+
+        serializer = OnAirOrderModelCreateSerializer(data=on_air_order_data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        on_air_order = serializer.save()
+
+        # 获取已确认的车位（排除被剔除的）
+        positions = VehicleAdPositionModel.objects.filter(
+            booking_detail_id__booking_order_id=booking_order.id,
+            delete_mark=0, enabled_mark=1,
+            allocation_status=1,
+            confirm_status__in=[CONFIRM_CONFIRMED, CONFIRM_PENDING],  # 已确认或待确认都包含
+        ).select_related('resource_id__base_media_type_id', 'booking_detail_id__media_type_id', 'vehicle_id')
+
+        created_count = 0
+        for position in positions:
+            try:
+                base_media_type = position.resource_id.base_media_type_id if position.resource_id else None
+                booking_detail = position.booking_detail_id
+                composite_media_type = None
+                composite_media_type_name = None
+
+                if booking_detail and booking_detail.is_composite and booking_detail.media_type_id:
+                    composite_media_type = booking_detail.media_type_id
+                    composite_media_type_name = booking_detail.media_type_name or ''
+
+                detail_data = {
+                    'order_id': on_air_order.id,
+                    'position_id': position.id,
+                    'roadline_id': position.roadline_id_id,
+                    'roadline_name': position.roadline_name or '',
+                    'roadline_company_id': position.roadline_company_id_id,
+                    'roadline_company_name': position.roadline_company_name or '',
+                    'plan_vehicle_id': position.vehicle_id_id,
+                    'plan_vehicle_no': position.vehicle_no or '',
+                    'composite_media_type_id': composite_media_type.id if composite_media_type else None,
+                    'composite_media_type_name': composite_media_type_name or '',
+                    'base_media_type_id': base_media_type.id if base_media_type else None,
+                    'base_media_type_name': base_media_type.media_name if base_media_type else '',
+                    'execution_status': 1,
+                }
+
+                detail_serializer = OnAirOrderDetailModelCreateSerializer(
+                    data=detail_data, context={'request': request}
+                )
+                detail_serializer.is_valid(raise_exception=True)
+                detail_serializer.save()
+                created_count += 1
+            except Exception as e:
+                print(f"[创建上刊明细] 失败: position_id={position.id}, error={str(e)}")
+                continue
+
+        return {
+            'success': True,
+            'order_no': on_air_order.order_no,
+            'created_detail_count': created_count,
+            'message': f"上刊订单 {order_no} 已创建，共 {created_count} 条明细"
+        }
+
     # ==================== 车位分配核心逻辑 ====================
     
     @transaction.atomic
@@ -941,259 +1991,39 @@ class BookingOrderModelViewSet(CustomModelViewSet):
     @transaction.atomic
     def approve(self, request, pk=None):
         """
-        审核通过预订单，并自动创建上刊订单主表和明细表
-        
+        兼容旧接口：直接审核通过预订单
+        对于新流程的订单会根据当前状态路由到对应的审批操作
+
         POST /api/BookingOrderModelViewSet/{id}/approve/
-        
-        请求体（可选）:
-        {
-            "review_comment": "审核意见"
-        }
         """
-        from datetime import datetime
-        import random
-        from django.utils import timezone
-        
-        # 导入上刊订单相关模型和序列化器
-        from dvadmin_twodev.airing_manage.on_air_order.models import OnAirOrderModel
-        from dvadmin_twodev.airing_manage.on_air_order_detail.models import OnAirOrderDetailModel
-        from dvadmin_twodev.airing_manage.on_air_order.serializers import OnAirOrderModelCreateSerializer
-        from dvadmin_twodev.airing_manage.on_air_order_detail.serializers import OnAirOrderDetailModelCreateSerializer
-        
         booking_order = self.get_object()
-        
-        # 检查订单状态
-        if booking_order.booking_status == 4:
-            return ErrorResponse(
-                msg="该订单已经审核通过，无需重复审核",
-                code=400
-            )
-        
-        if booking_order.booking_status == 7:
-            return ErrorResponse(
-                msg="该订单已被驳回，无法审核通过",
-                code=400
-            )
-        
-        # 检查是否已有上刊订单
-        existing_on_air_order = OnAirOrderModel.objects.filter(
-            booking_order_id=booking_order.id,
-            delete_mark=0
-        ).first()
-        
-        if existing_on_air_order:
-            return ErrorResponse(
-                msg=f"该预订单已存在上刊订单（订单号：{existing_on_air_order.order_no}），无需重复创建",
-                code=400
-            )
-        
-        # 获取审核意见
-        review_comment = request.data.get('review_comment', '')
-        
-        try:
-            # 1. 更新预订单状态为"已通过"
-            booking_order.booking_status = 4  # 已通过
+
+        # 根据当前状态路由
+        if booking_order.booking_status == STATUS_MEDIA_FIRST:
+            return self.first_review_approve(request, pk)
+        elif booking_order.booking_status == STATUS_MEDIA_FINAL:
+            return self.final_review_approve(request, pk)
+        elif booking_order.booking_status == STATUS_APPROVED:
+            return ErrorResponse(msg="该订单已审核通过", code=400)
+        elif booking_order.booking_status == STATUS_REJECTED:
+            return ErrorResponse(msg="该订单已被驳回", code=400)
+        else:
+            # 兼容旧流程：直接通过
+            review_comment = request.data.get('review_comment', '')
+            booking_order.booking_status = STATUS_APPROVED
+            booking_order.current_approval_node = None
             booking_order.approved_time = timezone.now()
+            if review_comment:
+                booking_order.remark = (booking_order.remark or '') + f"\n[审核意见] {review_comment}"
             booking_order.save()
-            
-            # 2. 生成上刊订单号（格式：ON-YYYYMMDD-XXXX）
-            date_str = datetime.now().strftime('%Y%m%d')
-            # 确保订单号唯一
-            while True:
-                random_str = str(random.randint(1000, 9999))
-                order_no = f"ON-{date_str}-{random_str}"
-                if not OnAirOrderModel.objects.filter(order_no=order_no).exists():
-                    break
-            
-            # 3. 获取预订单的日期范围（从明细中获取最早和最晚日期）
-            details = BookingOrderDetailModel.objects.filter(
-                booking_order_id=booking_order.id,
-                delete_mark=0,
-                enabled_mark=1
-            )
-            
-            if not details.exists():
-                return ErrorResponse(
-                    msg="该预订单没有明细数据，无法创建上刊订单",
-                    code=400
-                )
-            
-            # 计算日期范围
-            start_dates = [detail.start_date for detail in details if detail.start_date]
-            end_dates = [detail.end_date for detail in details if detail.end_date]
-            
-            if not start_dates or not end_dates:
-                return ErrorResponse(
-                    msg="该预订单明细缺少日期信息，无法创建上刊订单",
-                    code=400
-                )
-            
-            booking_start_date = min(start_dates)
-            booking_end_date = max(end_dates)
-            
-            # 4. 创建上刊订单主表
-            on_air_order_data = {
-                'order_no': order_no,
-                'booking_order_id': booking_order.id,
-                'customer_name': booking_order.customer_name or '',
-                'booking_start_date': booking_start_date,
-                'booking_end_date': booking_end_date,
-                'order_status': 4,  # 已通过
-                'approved_time': timezone.now(),
-                'remark': review_comment or booking_order.remark or '',
-                # 不手动传递creator，让序列化器自动从request中获取
-            }
-            
-            # 传递request上下文，让序列化器自动填充creator等审计字段
-            on_air_order_serializer = OnAirOrderModelCreateSerializer(
-                data=on_air_order_data,
-                context={'request': request}
-            )
-            on_air_order_serializer.is_valid(raise_exception=True)
-            on_air_order = on_air_order_serializer.save()
-            
-            # 5. 获取该预订单的所有车位广告
-            positions = VehicleAdPositionModel.objects.filter(
-                booking_detail_id__booking_order_id=booking_order.id,
-                delete_mark=0,
-                enabled_mark=1,
-                allocation_status__in=[1, 2]  # 已分配或已上刊
-            ).select_related(
-                'resource_id__base_media_type_id',
-                'booking_detail_id__media_type_id',
-                'roadline_id',
-                'roadline_company_id',
-                'vehicle_id'
-            )
-            
-            if not positions.exists():
-                return ErrorResponse(
-                    msg="该预订单没有分配车位，无法创建上刊订单明细",
-                    code=400
-                )
-            
-            # 6. 为每个车位广告创建上刊订单明细
-            created_detail_count = 0
-            failed_positions = []
-            
-            for position in positions:
-                try:
-                    # 检查resource_id是否存在
-                    if not position.resource_id:
-                        failed_positions.append({
-                            'position_id': position.id,
-                            'reason': '车位广告缺少资源位信息'
-                        })
-                        continue
-                    
-                    # 获取基础媒体类型（从resource_id获取）
-                    base_media_type = position.resource_id.base_media_type_id
-                    if not base_media_type:
-                        failed_positions.append({
-                            'position_id': position.id,
-                            'reason': '资源位缺少基础媒体类型信息'
-                        })
-                        continue
-                    
-                    # 获取组合媒体类型（从booking_detail_id获取，如果是组合类型）
-                    booking_detail = position.booking_detail_id
-                    composite_media_type = None
-                    composite_media_type_name = None
-                    
-                    if booking_detail and booking_detail.is_composite and booking_detail.media_type_id:
-                        composite_media_type = booking_detail.media_type_id
-                        composite_media_type_name = booking_detail.media_type_name or ''
-                    
-                    # 确保必要的关联对象存在
-                    if not position.roadline_id:
-                        failed_positions.append({
-                            'position_id': position.id,
-                            'reason': '车位广告缺少线路信息'
-                        })
-                        continue
-                    
-                    if not position.roadline_company_id:
-                        failed_positions.append({
-                            'position_id': position.id,
-                            'reason': '车位广告缺少营运公司信息'
-                        })
-                        continue
-                    
-                    # 创建上刊订单明细
-                    detail_data = {
-                        'order_id': on_air_order.id,
-                        'position_id': position.id,
-                        'roadline_id': position.roadline_id.id,
-                        'roadline_name': position.roadline_name or '',
-                        'roadline_company_id': position.roadline_company_id.id,
-                        'roadline_company_name': position.roadline_company_name or '',
-                        'plan_vehicle_id': position.vehicle_id.id if position.vehicle_id else None,
-                        'plan_vehicle_no': position.vehicle_no or '',
-                        'composite_media_type_id': composite_media_type.id if composite_media_type else None,
-                        'composite_media_type_name': composite_media_type_name or '',
-                        'base_media_type_id': base_media_type.id,
-                        'base_media_type_name': base_media_type.media_name or '',
-                        'execution_status': 1,  # 待执行
-                        # 不手动传递creator，让序列化器自动从request中获取
-                    }
-                    
-                    # 传递request上下文，让序列化器自动填充creator等审计字段
-                    detail_serializer = OnAirOrderDetailModelCreateSerializer(
-                        data=detail_data,
-                        context={'request': request}
-                    )
-                    detail_serializer.is_valid(raise_exception=True)
-                    detail_serializer.save()
-                    created_detail_count += 1
-                    
-                except Exception as e:
-                    # 记录错误但继续处理其他明细
-                    import traceback
-                    error_detail = traceback.format_exc()
-                    print(f"[审核通过] 创建上刊订单明细失败: position_id={position.id}, error={str(e)}")
-                    print(f"[审核通过] 错误详情: {error_detail}")
-                    failed_positions.append({
-                        'position_id': position.id,
-                        'reason': f'创建明细时发生异常: {str(e)}'
-                    })
-                    continue
-            
-            if created_detail_count == 0:
-                # 如果所有明细都创建失败，回滚上刊订单主表
-                on_air_order.delete()
-                error_msg = "创建上刊订单明细失败，请检查车位广告数据"
-                if failed_positions:
-                    failed_details = []
-                    for p in failed_positions[:5]:
-                        failed_details.append(f"车位ID:{p['position_id']}-{p['reason']}")
-                    error_msg += f"\n失败详情：{', '.join(failed_details)}"
-                return ErrorResponse(
-                    msg=error_msg,
-                    code=500
-                )
-            
-            # 构建返回消息
-            msg = f"审核通过！已创建上刊订单（订单号：{on_air_order.order_no}），共 {created_detail_count} 条明细"
-            if failed_positions:
-                msg += f"，{len(failed_positions)} 条明细创建失败"
-            
+
+            on_air_result = self._create_on_air_order(booking_order, request)
+            msg = "审核通过"
+            if on_air_result.get('success'):
+                msg += f"，已创建上刊订单（{on_air_result.get('order_no', '')}）"
+
             return SuccessResponse(
-                data={
-                    'on_air_order_id': str(on_air_order.id),
-                    'on_air_order_no': on_air_order.order_no,
-                    'created_detail_count': created_detail_count,
-                    'failed_count': len(failed_positions),
-                    'failed_positions': failed_positions[:10] if failed_positions else [],  # 最多返回10条失败记录
-                },
+                data={'id': str(booking_order.id), 'on_air_result': on_air_result},
                 msg=msg
-            )
-            
-        except Exception as e:
-            import traceback
-            error_detail = traceback.format_exc()
-            print(f"[审核通过] 异常详情: {error_detail}")
-            return ErrorResponse(
-                msg=f"审核通过失败: {str(e)}",
-                code=500
             )
 

@@ -9,8 +9,6 @@ import { getIndexColumnConfig } from '/@/utils/commonCrud';
 import BookingOrderDetailTable from './components/BookingOrderDetailTable.vue';
 import * as detailApi from '../../booking_order_detail/BookingOrderDetailModelViewSet/api';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { CreateFlow } from '/@/views/plugins/bs-workflow/api/process'; // Import CreateFlow
-import { useUserInfo } from '/@/stores/userInfo';
 
 // 客户API前缀
 const customerApiPrefix = '/api/CustomerModelViewSet/';
@@ -19,7 +17,6 @@ const bookingOrderApiPrefix = '/api/BookingOrderModelViewSet/';
 
 //此处为crudOptions配置
 export default function ({ crudExpose, context }: { crudExpose: CrudExpose; context?: any }): CreateCrudOptionsRet {
-	const userStore = useUserInfo();
 	// 客户列表
 	const customerList: Ref<any[]> = ref([]);
 
@@ -188,7 +185,7 @@ export default function ({ crudExpose, context }: { crudExpose: CrudExpose; cont
 
 		// 设置预订单状态默认值（新增时字段被隐藏，但提交时需要）
 		if (!form.booking_status) {
-			form.booking_status = 3; // 默认值：审批中
+			form.booking_status = 1; // 默认值：草稿
 		}
 
 		// 检查是否有明细数据
@@ -386,7 +383,7 @@ export default function ({ crudExpose, context }: { crudExpose: CrudExpose; cont
 			},
 			rowHandle: {
 				fixed: 'right',
-				width: 280,
+				width: 360,
 				buttons: {
 					view: {
 						type: 'text',
@@ -394,20 +391,51 @@ export default function ({ crudExpose, context }: { crudExpose: CrudExpose; cont
 						show: auth('BookingOrderModelViewSet:Retrieve'),
 					},
 					edit: {
+						text: '编辑',
 						type: 'text',
 						order: 2,
 						show: auth('BookingOrderModelViewSet:Update'),
+						// 只有草稿和已驳回状态可编辑
+						disabled: ({ row }: any) => row.booking_status !== 1,
 					},
 					remove: {
 						type: 'text',
-						order: 4,
+						order: 10,
 						show: auth('BookingOrderModelViewSet:Delete'),
+						// 只有草稿状态可删除
+						disabled: ({ row }: any) => row.booking_status !== 1,
+					},
+					submit: {
+						text: '提交审批',
+						type: 'text',
+						order: 3,
+						show: auth('BookingOrderModelViewSet:Update'),
+						// 只有草稿状态显示
+						disabled: ({ row }: any) => row.booking_status !== 1,
+						click: async ({ row }: any) => {
+							try {
+								await ElMessageBox.confirm('确认提交该预订单进入审批流程？提交后将自动分配车位。', '确认提交', { type: 'warning' });
+								const res = await api.submitForApproval(row.id);
+								if (res && res.code === 2000) {
+									ElMessage.success(res.msg || '提交成功');
+									crudExpose.doRefresh();
+								} else {
+									ElMessage.error(res?.msg || '提交失败');
+								}
+							} catch (e: any) {
+								if (e !== 'cancel') {
+									ElMessage.error(e?.response?.data?.msg || e?.message || '提交失败');
+								}
+							}
+						},
 					},
 					review: {
 						text: '审核',
 						type: 'text',
-						order: 3,
+						order: 4,
 						show: auth('BookingOrderModelViewSet:Retrieve'),
+						// 审批中的状态才显示审核按钮
+						disabled: ({ row }: any) => ![2, 3, 4].includes(row.booking_status),
 						click: ({ row }: any) => {
 							const dialog = (globalThis as any).__reviewDialog;
 							if (dialog) {
@@ -417,51 +445,59 @@ export default function ({ crudExpose, context }: { crudExpose: CrudExpose; cont
 							}
 						},
 					},
-					startFlow: {
-						text: '发起流程',
+					resubmit: {
+						text: '重新发起',
 						type: 'text',
 						order: 5,
-						show: true, // 隐藏发起流程按钮
-						click: async ({ row }) => {
+						show: auth('BookingOrderModelViewSet:Create'),
+						// 只有已驳回状态显示
+						disabled: ({ row }: any) => row.booking_status !== 7,
+						click: async ({ row }: any) => {
 							try {
-								await ElMessageBox.confirm('是否确认发起流程?', '提示', {
-									confirmButtonText: '确定',
-									cancelButtonText: '取消',
+								await ElMessageBox.confirm('确认基于此订单重新发起？将创建新的预订单。', '确认重新发起', { type: 'warning' });
+								const res = await api.resubmit(row.id);
+								if (res && res.code === 2000) {
+									ElMessage.success(res.msg || '重新发起成功');
+									crudExpose.doRefresh();
+								} else {
+									ElMessage.error(res?.msg || '重新发起失败');
+								}
+							} catch (e: any) {
+								if (e !== 'cancel') {
+									ElMessage.error(e?.response?.data?.msg || e?.message || '重新发起失败');
+								}
+							}
+						},
+					},
+					cancel: {
+						text: '取消',
+						type: 'text',
+						order: 9,
+						show: auth('BookingOrderModelViewSet:Update'),
+						// 草稿、审批中可取消
+						disabled: ({ row }: any) => ![1, 2, 3, 4].includes(row.booking_status),
+						click: async ({ row }: any) => {
+							try {
+								const { value: reason } = await ElMessageBox.prompt('请输入取消原因', '确认取消', {
+									confirmButtonText: '确认取消',
+									cancelButtonText: '返回',
+									inputType: 'textarea',
 									type: 'warning',
 								});
-
-								const loading = ElMessage.success({
-									message: '流程发起中...',
-									duration: 0,
-								});
-
-								const postData = {
-									schemeCode: "Test0129", // Adapted scheme code
-									processId: row.id,
-									title: `预订订单流程-${row.booking_no}`,
-									level: "0",
-									auditors: null,
-									createUserId: userStore.userInfos.id,
-								};
-
-								await CreateFlow(postData).then((res: any) => {
-									loading.close();
-									if (res.code === 2000) {
-										ElMessage.success(res.msg || '流程发起成功');
-										crudExpose.doRefresh();
-									} else {
-										ElMessage.error(res.msg || '流程发起失败');
-									}
-								}).catch((err: any) => {
-									loading.close();
-									// ElMessage.error('请求失败');
-								});
-
-							} catch (e) {
-								// Cancelled
+								const res = await api.cancelOrder(row.id, { cancel_reason: reason || '' });
+								if (res && res.code === 2000) {
+									ElMessage.success(res.msg || '已取消');
+									crudExpose.doRefresh();
+								} else {
+									ElMessage.error(res?.msg || '取消失败');
+								}
+							} catch (e: any) {
+								if (e !== 'cancel') {
+									ElMessage.error(e?.response?.data?.msg || e?.message || '取消失败');
+								}
 							}
-						}
-					}
+						},
+					},
 				},
 			},
 			columns: {
@@ -675,17 +711,38 @@ export default function ({ crudExpose, context }: { crudExpose: CrudExpose; cont
 				// 	},
 				// },
 
-				// 预订单状态显示字段
-				booking_status_display: {
+				// 预订单状态（搜索用）
+				booking_status: {
 					title: '预订单状态',
-					type: 'text',
-					search: { show: false },
+					type: 'dict-select',
+					search: { show: true },
+					dict: dict({
+						data: [
+							{ value: 1, label: '草稿', color: 'info' },
+							{ value: 2, label: '待媒体部初审', color: 'warning' },
+							{ value: 3, label: '待营运公司审核', color: 'warning' },
+							{ value: 4, label: '待媒体部复审', color: 'warning' },
+							{ value: 5, label: '已通过', color: 'success' },
+							{ value: 6, label: '已完成', color: 'success' },
+							{ value: 7, label: '已驳回', color: 'danger' },
+							{ value: 8, label: '已取消', color: 'info' },
+						],
+					}),
 					column: {
-						minWidth: 50,
-						sortable: false,
-						align: 'left',
+						minWidth: 120,
+						sortable: 'custom',
+						align: 'center',
 						show: true,
 					},
+					form: { show: false },
+				},
+
+				// 预订单状态显示字段（隐藏，由booking_status替代）
+				booking_status_display: {
+					title: '预订单状态显示',
+					type: 'text',
+					search: { show: false },
+					column: { show: false },
 					form: { show: false },
 				},
 
