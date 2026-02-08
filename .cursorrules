@@ -1,0 +1,159 @@
+## WeaveNet 的 Cursor 规则（Django + Vue3 单仓库）
+
+本仓库包含 Python Django 后端（位于 `backend/`）与 Vue3（Vite）前端（位于 `web/`）。该项目以 `Django-vue3-admin` 为基础进行二次开发与定制。
+
+### 目标
+- 以安全、增量的方式进行编辑，遵循 Django 与 Vue3 的最佳实践。
+- 优先阅读现有代码与配置，尽量避免猜测；首先使用语义搜索定位相关位置。
+- 保留既有编码风格与工具链，非必要不引入新技术栈。
+
+### 项目结构
+- 后端（Django）：`backend/`
+  - 入口：`backend/manage.py`
+  - Django 工程：`backend/application/`（settings、urls、asgi/wsgi、celery）
+  - 应用：`backend/dvadmin/`（utils、system 应用、views、models、migrations）
+  - 配置与环境：`backend/conf/`（`env.py`、`env.example.py`）
+  - 静态与模板：`backend/static/`、`backend/templates/`
+  - Docker：`docker_env/`、`docker-compose.yml`
+- 前端（Vue3 + Vite）：`web/`（使用 pnpm；锁文件 `pnpm-lock.yaml`）
+
+### 运行环境
+- 操作系统：Windows 10（PowerShell）。尽量使用跨平台命令。
+- Python：使用 venv。后端依赖位于 `backend/requirements.txt`。
+- Node：在 `web/` 下使用 pnpm。
+- Docker：可选，通过 `docker-compose.yml`。
+
+### 启动与调试
+- 后端（venv）：
+  ```bash
+  python -m venv .venv
+  .\.venv\Scripts\Activate.ps1
+  pip install -r backend/requirements.txt
+  python backend/manage.py migrate
+  python backend/manage.py runserver 0.0.0.0:8000
+  ```
+- Celery（Windows 友好，solo 模式）：
+  ```bash
+  .\.venv\Scripts\Activate.ps1
+  celery -A application worker -l info -P solo --workdir backend
+  ```
+- 前端（pnpm）：
+  ```bash
+  cd web
+  pnpm install --no-frozen-lockfile
+  pnpm dev
+  ```
+- 前端构建：
+  ```bash
+  cd web
+  pnpm build
+  ```
+- Docker（可选）：
+  ```bash
+  docker compose up -d --build
+  ```
+
+### 数据库与迁移
+- 生成迁移：`python backend/manage.py makemigrations`
+- 应用迁移：`python backend/manage.py migrate`
+- 非经明确要求，请勿手动编辑迁移文件。
+
+### 配置与密钥
+- 将 `backend/conf/env.example.py` 复制为 `backend/conf/env.py`，并在本地补全配置。
+- 禁止提交任何密钥或与机器相关的敏感信息。
+- 在代码中优先从 `env.py` 读取配置。
+
+### Lint 与格式化
+- Python：如环境中存在 `black`、`isort`、`ruff`，请使用它们；否则遵循既有风格，避免无关格式化。
+  - 示例：
+    ```bash
+    black backend
+    isort backend
+    ruff check backend
+    ```
+- 前端：若 `web/` 已配置 ESLint/Prettier，请通过项目脚本运行；否则匹配现有代码风格。
+
+### 测试
+- 如存在测试，用以下命令运行：
+  ```bash
+  python backend/manage.py test
+  ```
+- 未经请求，不要引入新的测试框架。
+
+### API 与文档
+- Swagger/Redoc 资源位于 `backend/static/drf-yasg`，模板在 `backend/templates/drf-yasg/`。
+- 新增 API 时，请在 `backend/dvadmin/system/urls.py` 或对应应用的 `urls.py` 中注册路由，并更新序列化器/权限等。
+
+### Cursor 智能体行为
+- 在询问用户前，请先使用语义搜索通览仓库：
+  - 先看高层流程（认证、权限、路由、celery、settings）。
+  - 再缩小范围至具体应用或模块。
+- 优先阅读文件而非猜测，避免不必要代码扰动。
+- 仅修改必要的最小行数，避免大规模重排。
+- 保持缩进与 import 顺序（除非使用 `isort`）。
+- 展示已有代码：使用“行号+路径”的代码引用；展示建议新代码：使用 fenced code。
+- 若需改动多个文件，保持同一主题下的小而聚焦的修改。
+
+### 编辑规范
+- 非必要不引入新依赖；如需引入，请说明原因，并将最小版本加入正确清单（`backend/requirements.txt` 或 `web/package.json`）。
+- Django 相关：
+  - 仅在必要时修改 `application/settings.py`，并给出清晰理由。
+  - 正确注册应用、路由、admin。
+  - 新建模型需创建迁移，避免破坏性变更，勿轻易影响已有数据。
+  - **模型字段规范**：
+    - 所有模型字段**必须**包含 `db_comment` 属性，用于在数据库层面添加字段注释。
+    - `db_comment` 通常与 `help_text` 保持一致，或提供更详细的字段说明。
+    - 示例：
+      ```python
+      line_name = models.CharField(
+          max_length=100,
+          null=True,
+          blank=True,
+          verbose_name="线路名称",
+          help_text="线路名称",
+          db_comment="线路名称"  # 必须包含
+      )
+      ```
+    - 对于已有模型，在修改字段时也应补充 `db_comment`。
+- Vue3 相关：
+  - 沿用 `web/src/stores` 与 `web/src/router` 的状态与路由模式。
+  - 匹配既有组件结构与代码风格。
+
+### 性能与安全
+- 使用 `backend/dvadmin/utils/validator.py` 或 DRF 序列化器进行输入校验。
+- 需要分页时使用 `backend/dvadmin/utils/pagination.py`。
+- 避免 N+1 查询，合理使用 `select_related`/`prefetch_related`。
+- 禁止记录密钥；错误信息需对用户友好，服务端使用合适状态码抛出异常。
+
+### 分支与提交
+- 分支命名：`feature/<scope>-<short-desc>` 或 `fix/<scope>-<short-desc>`。
+- 建议采用约定式提交：`feat:`、`fix:`、`chore:`、`docs:`、`refactor:`、`test:`、`build:`。
+- 保持提交聚焦：一次提交只包含一个逻辑变更。
+
+### PR 检查清单（面向智能体准备的变更）
+- 代码可在本地成功构建与运行（后端/前端按需）。
+- 若有迁移，已创建并可成功应用。
+- 不引入新的 linter/类型错误。
+- 变更面最小化，无无关格式化。
+- 若行为有变更，已补充文档或使用说明。
+
+### 大文件与忽略建议
+- 非必要不要扫描或编辑体积较大的静态资源：`backend/static/`、`web/src/assets/`。
+- 除非绝对必要，跳过第三方/锁文件：`web/node_modules/`、`web/pnpm-lock.yaml`。
+
+### 关键路径速查
+- Django 设置：`backend/application/settings.py`
+- Django 路由：`backend/application/urls.py`，以及各应用的 `urls.py`
+- DRF 视图：`backend/dvadmin/**/views/*.py`
+- 模型：`backend/dvadmin/**/models.py`
+- 序列化器：`backend/dvadmin/utils/serializers.py` 及各应用自有序列化器
+- 前端入口：`web/src/main.ts`、`web/src/App.vue`
+- 前端路由：`web/src/router/*.ts`
+- 前端接口模块：`web/src/api/**/**/*.ts`
+
+### 不确定时
+- 阅读上下文与周边代码，寻找已存在的模式并进行模仿。
+- 倾向通过新增可配置项与默认值避免破坏性变化。
+- 仅当无法从代码结构推断需求时再向用户确认。
+
+

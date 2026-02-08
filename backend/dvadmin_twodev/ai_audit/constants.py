@@ -1,0 +1,34 @@
+"""
+AI审核常量定义
+Description: 定义AI审核相关的常量
+Version: 1.0
+Date: 2026-02-03
+"""
+
+# 审核编号前缀
+AUDIT_NO_PREFIX = "AUD"
+
+# 阿里百炼平台标识
+PLATFORM_ALIBABA_BAILIAN = "阿里百炼"
+PLATFORM_ALIBABA_BAILIAN_EN = "Alibaba Bailian"
+
+# 审核超时时间（秒）
+AUDIT_TIMEOUT = 60
+
+# 置信度范围
+CONFIDENCE_MIN = 0.0
+CONFIDENCE_MAX = 100.0
+
+# 默认置信度阈值
+CONFIDENCE_THRESHOLD_HIGH = 80.0  # 高置信度阈值
+CONFIDENCE_THRESHOLD_MEDIUM = 60.0  # 中置信度阈值
+CONFIDENCE_THRESHOLD_LOW = 40.0  # 低置信度阈值
+
+# JSON字段默认值
+DEFAULT_DETECTION_DETAILS = []
+DEFAULT_VIOLATION_CONTENT = []
+DEFAULT_FALSE_DETECTIONS = []
+DEFAULT_MISSED_DETECTIONS = []
+
+# 阿里百炼Key
+ALIBABA_BAILIAN_KEY = "sk-b6314cd2dcbb435bbff8c5ad0e6c412e"

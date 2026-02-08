@@ -1,0 +1,773 @@
+---
+alwaysApply: true
+description: dvadmin_twodev业务模块和dvadmin_extensions扩展模块的代码编写规范
+---
+
+# dvadmin_twodev 和 dvadmin_extensions 开发规范
+
+## 目录结构与模块组织
+
+### dvadmin_twodev 业务模块结构
+
+业务代码按功能分类存储在 `dvadmin_twodev/` 目录下，分为以下几个层级：
+
+```
+dvadmin_twodev/
+├── basedata/          # 基础数据模块
+├── baseentity/        # 基础实体定义
+├── constants/         # 常量定义模块
+├── dto/               # 数据传输对象
+└── utils/             # 工具类模块（gaode、geo等）
+```
+
+### dvadmin_extensions 扩展模块结构
+
+系统扩展功能存储在 `dvadmin_extensions/` 目录下：
+
+```
+dvadmin_extensions/
+├── data_permission/   # 数据权限扩展
+├── [other_extensions]/ # 其他扩展功能
+```
+
+### 标准模块目录结构
+
+每个业务模块应遵循以下标准结构：
+
+```python
+module_name/
+├── __init__.py        # 模块初始化
+├── admin.py           # Django Admin配置
+├── apps.py            # Django应用配置
+├── models.py          # 数据模型定义
+├── serializers.py     # DRF序列化器
+├── views.py           # 视图集
+├── urls.py            # URL路由配置
+├── tests.py           # 单元测试
+└── migrations/        # 数据库迁移文件
+```
+
+## 模型开发规范
+
+### 基础模型继承
+
+所有业务模型**必须继承** [BaseDataModel](mdc:backend/dvadmin_twodev/baseentity/models.py)：
+
+```python
+'''
+Description: 模型功能描述
+Version: 1.0
+Author: 开发者姓名
+Date: YYYY-MM-DD
+LastEditors: 
+LastEditTime: YYYY-MM-DD
+'''
+from django.db import models
+from dvadmin_twodev.baseentity.models import BaseDataModel
+
+class YourModel(BaseDataModel):
+    """
+    模型类功能说明
+    继承自BaseDataModel，自动获得通用字段和功能
+    """
+    
+    # 字段定义
+    field_name = models.CharField(
+        max_length=200,
+        null=True,
+        blank=True,
+        verbose_name="字段名称",
+        help_text="字段说明"
+    )
+    
+    class Meta:
+        db_table = 'your_table_name'
+        verbose_name = "模型显示名称"
+        verbose_name_plural = verbose_name
+        ordering = ['-create_datetime']
+        indexes = [
+            models.Index(fields=['field_name']),
+        ]
+```
+
+### BaseDataModel 提供的基础功能
+
+- **审计字段**: id、description、creator、modifier、dept_belong_id、create_datetime、update_datetime
+- **业务字段**: delete_mark(删除标记)、enabled_mark(启用标记)、creator_name、modifier_name
+- **软删除**: 自动实现软删除机制
+- **审计追踪**: 自动记录创建和修改信息
+
+### 字段定义规范
+
+#### 标准字段模板
+
+```python
+class TxGridOdModel(BaseDataModel):
+    """
+    模型功能描述
+    """
+    
+    # 主键字段
+    od_id = models.CharField(
+        max_length=30,
+        unique=True,
+        verbose_name="OD-ID",
+        help_text="唯一标识符说明",
+        db_comment="数据库字段注释"
+    )
+    
+    # 关联ID字段
+    origin_grid_id = models.CharField(
+        max_length=20,
+        verbose_name="起点网格ID",
+        help_text="起点网格的唯一标识",
+        db_comment="起点网格ID"
+    )
+    
+    # 数值字段
+    monthly_total_person_times = models.IntegerField(
+        default=0,
+        verbose_name="月累计人次",
+        help_text="月累计人次统计",
+        db_comment="月累计人次"
+    )
+    
+    # 字符串字段
+    sta_month = models.CharField(
+        max_length=7,
+        null=True,
+        blank=True,
+        verbose_name="统计月份",
+        help_text="统计月份（格式：2025-05）",
+        db_comment="统计月份"
+    )
+```
+
+### 模型属性(Property)定义
+
+使用 `@property` 装饰器定义计算字段和显示字段：
+
+```python
+class TxGridOdModel(BaseDataModel):
+    """
+    通勤OD数据模型
+    """
+    
+    @property
+    def od_relation_display(self):
+        """
+        获取OD关系显示
+        """
+        return f"{self.origin_grid_id} → {self.dest_grid_id}"
+    
+    @property
+    def person_times_display(self):
+        """
+        获取人次显示（带千分位分隔符）
+        """
+        return f"{self.monthly_total_person_times:,}"
+    
+    def __str__(self):
+        return f"通勤OD-{self.od_id}"
+```
+
+### Meta配置规范
+
+```python
+class Meta:
+    # 表名（不使用table_prefix，直接定义完整表名）
+    db_table = 'tx_grid_od'
+    
+    # 模型显示名称
+    verbose_name = "通勤OD数据"
+    verbose_name_plural = "通勤OD数据"
+    
+    # 默认排序
+    ordering = ['-create_datetime']
+    
+    # 数据库索引
+    indexes = [
+        models.Index(fields=['origin_grid_id'], name='idx_origin_grid'),
+        models.Index(fields=['dest_grid_id'], name='idx_dest_grid'),
+    ]
+    
+    # 唯一约束（可选）
+    unique_together = [['origin_grid_id', 'dest_grid_id']]
+```
+
+## 视图集开发规范
+
+### 基础视图集结构
+
+所有视图集**必须继承** [CustomModelViewSet](mdc:backend/dvadmin/utils/viewset.py)：
+
+```python
+'''
+Description: 视图集功能描述
+Version: 1.0
+Author: 开发者姓名
+Date: YYYY-MM-DD
+LastEditors: 
+LastEditTime: YYYY-MM-DD
+'''
+from rest_framework.decorators import action
+from dvadmin.utils.viewset import CustomModelViewSet
+from dvadmin.utils.json_response import SuccessResponse, ErrorResponse
+from .models import YourModel
+from .serializers import (
+    YourModelSerializer,
+    YourModelCreateSerializer,
+    YourModelUpdateSerializer,
+    YourModelListSerializer,
+)
+
+class YourModelViewSet(CustomModelViewSet):
+    """
+    模型管理视图集
+    提供标准的 CRUD 接口和自定义业务接口
+    """
+    
+    queryset = YourModel.objects.all()
+    serializer_class = YourModelSerializer
+    create_serializer_class = YourModelCreateSerializer
+    update_serializer_class = YourModelUpdateSerializer
+    list_serializer_class = YourModelListSerializer
+    
+    # 排序配置
+    ordering_fields = ['field1', 'field2', 'create_datetime']
+    ordering = ['-create_datetime']
+```
+
+### 自定义业务方法
+
+使用 `@action` 装饰器定义自定义接口：
+
+```python
+class TxGridOdModelViewSet(CustomModelViewSet):
+    """通勤OD数据管理"""
+    
+    @action(detail=False, methods=['get'], url_path='total-person-times')
+    def get_total_person_times(self, request):
+        """
+        获取月累计人次总和
+        支持按统计月份筛选
+        
+        请求参数:
+            - sta_month: 统计月份（可选）
+            
+        返回结果:
+        {
+            "code": 2000,
+            "data": {
+                "total_person_times": 10000,
+                "sta_month": "2025-01",
+                "count": 100
+            },
+            "msg": "获取成功"
+        }
+        """
+        # 获取查询参数
+        sta_month = request.query_params.get('sta_month', None)
+        
+        # 构建查询集
+        queryset = self.get_queryset()
+        if sta_month:
+            queryset = queryset.filter(sta_month=sta_month)
+        
+        # 聚合计算
+        total_sum = queryset.aggregate(
+            total=Sum('monthly_total_person_times')
+        )['total'] or 0
+        
+        # 返回响应
+        return SuccessResponse(
+            data={
+                'total_person_times': total_sum,
+                'sta_month': sta_month,
+                'count': queryset.count()
+            },
+            msg="获取月累计人次总和成功"
+        )
+```
+
+### 事务处理
+
+对于包含数据库写入的自定义方法，必须使用事务：
+
+```python
+from django.db import transaction
+
+class DistrictModelViewSet(CustomModelViewSet):
+    """区属管理"""
+    
+    @action(methods=['POST'], detail=False, url_path='generate_from_amap')
+    def generate_from_amap(self, request):
+        """
+        从高德地图生成行政区数据
+        """
+        try:
+            with transaction.atomic():
+                # 1. 清空现有数据
+                deleted_count = DistrictModel.objects.all().delete()[0]
+                
+                # 2. 调用工具类
+                from dvadmin_twodev.utils.gaode import GaodeAPI
+                gaode = GaodeAPI()
+                data = gaode.district(params)
+                
+                # 3. 批量插入
+                district_list = []
+                for district in data.get('districts', []):
+                    district_obj = DistrictModel(
+                        name=district.get('name'),
+                        # ... 其他字段
+                    )
+                    district_list.append(district_obj)
+                
+                DistrictModel.objects.bulk_create(district_list)
+                
+                return SuccessResponse(
+                    data={'deleted_count': deleted_count, 'created_count': len(district_list)},
+                    msg=f"生成成功！删除 {deleted_count} 条，创建 {len(district_list)} 条数据"
+                )
+        except Exception as e:
+            return ErrorResponse(msg=f"生成失败: {str(e)}")
+```
+
+### 工具类使用
+
+优先使用项目提供的工具类：
+
+```python
+# 高德地图API工具
+from dvadmin_twodev.utils.gaode import GaodeAPI
+
+# 地理计算工具
+from dvadmin_twodev.utils.geo import GeoCalculator, CoordConverter, GridCalculator
+
+# 常量引用
+from dvadmin_twodev.constants import system_constants, business_constants
+```
+
+## 序列化器开发规范
+
+### 序列化器分类
+
+按使用场景定义不同的序列化器：
+
+```python
+'''
+Description: 模型序列化器
+Version: 1.0
+Author: 开发者姓名
+Date: YYYY-MM-DD
+LastEditors: 
+LastEditTime: YYYY-MM-DD
+'''
+from rest_framework import serializers
+from dvadmin.utils.serializers import CustomModelSerializer
+from .models import YourModel
+
+class YourModelSerializer(CustomModelSerializer):
+    """
+    基础序列化器
+    用于详情、更新等场景
+    """
+    
+    # 计算字段
+    type_display = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = YourModel
+        fields = "__all__"
+        read_only_fields = ["id", "create_datetime", "update_datetime"]
+    
+    def get_type_display(self, obj):
+        """获取显示字段"""
+        return obj.type if obj else "未知"
+
+
+class YourModelCreateSerializer(YourModelSerializer):
+    """
+    创建序列化器
+    用于创建新记录时的验证
+    """
+    
+    class Meta(YourModelSerializer.Meta):
+        extra_kwargs = {
+            "name": {"required": True},
+            "type": {"required": True},
+        }
+
+
+class YourModelUpdateSerializer(YourModelSerializer):
+    """
+    更新序列化器
+    用于更新现有记录时的验证
+    """
+    
+    class Meta(YourModelSerializer.Meta):
+        read_only_fields = ["id", "create_datetime", "update_datetime"]
+    
+    def validate(self, attrs):
+        """整体验证"""
+        attrs = super().validate(attrs)
+        # 自定义验证逻辑
+        return attrs
+
+
+class YourModelListSerializer(YourModelSerializer):
+    """
+    列表序列化器
+    只包含列表展示需要的核心字段
+    """
+    
+    class Meta:
+        model = YourModel
+        fields = [
+            "id",
+            "name",
+            "type",
+            "type_display",
+            "create_datetime",
+            "update_datetime",
+        ]
+        read_only_fields = fields
+```
+
+### 验证方法规范
+
+```python
+class YourModelSerializer(CustomModelSerializer):
+    """序列化器"""
+    
+    def validate_name(self, value):
+        """字段级验证"""
+        if not value or not value.strip():
+            raise serializers.ValidationError("名称不能为空")
+        return value.strip()
+    
+    def validate(self, attrs):
+        """对象级验证"""
+        # 调用父类验证
+        attrs = super().validate(attrs)
+        
+        # 自定义验证逻辑
+        parent_id = attrs.get('parent_id')
+        current_type = attrs.get('type')
+        
+        if parent_id and current_type:
+            # 验证层级关系
+            parent = YourModel.objects.filter(id=parent_id).first()
+            if parent:
+                # 层级验证逻辑
+                pass
+        
+        return attrs
+```
+
+## URL路由规范
+
+### 标准路由配置
+
+```python
+'''
+Description: URL路由配置
+Version: 1.0
+Author: 开发者姓名
+Date: YYYY-MM-DD
+LastEditors: 
+LastEditTime: YYYY-MM-DD
+'''
+from rest_framework.routers import SimpleRouter
+from .views import YourModelViewSet
+
+router = SimpleRouter()
+
+# 注册视图集
+# API地址格式：api/YourModelViewSet/
+router.register("api/YourModelViewSet", YourModelViewSet)
+
+urlpatterns = []
+urlpatterns += router.urls
+```
+
+### 路由命名规则
+
+- API路径格式: `api/ModelNameViewSet`
+- 自定义action路径: `api/ModelNameViewSet/action-name/`
+- 注意: 视图集名称必须是 `ModelNameViewSet` 格式
+
+## 常量定义规范
+
+### 常量模块结构
+
+常量分类存储在 `dvadmin_twodev/constants/` 目录：
+
+```python
+# system_constants.py - 系统常量
+from dvadmin_twodev.constants import system_constants
+
+# business_constants.py - 业务常量  
+from dvadmin_twodev.constants import business_constants
+```
+
+### 常量定义格式
+
+```python
+# -*- coding: utf-8 -*-
+
+"""
+系统/业务常量定义
+包含相关配置和常量
+
+@author: 开发者姓名
+@Created on: YYYY-MM-DD HH:MM:SS
+@Remark: 常量说明
+"""
+
+# ================================================= #
+# ******************** 分类标题 ******************** #
+# ================================================= #
+
+# 常量名称（全大写，使用下划线）
+CONSTANT_NAME = "常量值"
+
+# 状态选择
+STATUS_CHOICES = [
+    (True, '启用'),
+    (False, '禁用'),
+]
+
+# 字典配置
+CONFIG_DICT = {
+    'key1': 'value1',
+    'key2': 'value2',
+}
+```
+
+### 常量使用规范
+
+```python
+# 在模型中
+from dvadmin_twodev.constants import system_constants, business_constants
+
+class GridModel(BaseDataModel):
+    status = models.BooleanField(
+        choices=system_constants.STATUS_CHOICES,
+        default=True,
+        verbose_name="状态"
+    )
+    grid_size = models.IntegerField(
+        choices=business_constants.GRID_SIZE_OPTIONS,
+        default=business_constants.DEFAULT_GRID_SIZE,
+        verbose_name="网格大小"
+    )
+
+# 在视图集中
+from dvadmin_twodev.constants import business_constants
+
+class GridViewSet(CustomModelViewSet):
+    def get_queryset(self):
+        grid_size_options = business_constants.GRID_SIZE_OPTIONS
+        return super().get_queryset()
+```
+
+## 工具类开发规范
+
+### 工具类模块结构
+
+工具类存储在 `dvadmin_twodev/utils/` 目录：
+
+```
+utils/
+├── gaode/              # 高德地图工具
+│   ├── __init__.py
+│   ├── api.py
+│   └── README.md
+├── geo/                # 地理计算工具
+│   ├── __init__.py
+│   ├── geo_utils.py
+│   └── README.md
+└── usage_example.py    # 使用示例
+```
+
+### 工具类代码规范
+
+```python
+# -*- coding: utf-8 -*-
+
+"""
+工具类模块
+提供功能描述
+
+@author: 开发者姓名
+@Created on: YYYY-MM-DD
+@Remark: 工具类说明
+"""
+
+class YourCalculator:
+    """
+    工具类功能说明
+    
+    提供方法说明
+    """
+    
+    def __init__(self):
+        """初始化"""
+        pass
+    
+    @classmethod
+    def calculate(cls, param1, param2):
+        """
+        计算方法
+        
+        Args:
+            param1: 参数1说明
+            param2: 参数2说明
+            
+        Returns:
+            返回值说明
+            
+        Raises:
+            ValueError: 参数错误时抛出
+        """
+        pass
+```
+
+## 扩展模块规范
+
+### 扩展模块结构
+
+扩展功能存储在 `dvadmin_extensions/` 目录：
+
+```python
+# 扩展模块应保持独立和可插拔
+# 不应影响核心业务代码
+
+# views.py示例
+from rest_framework.decorators import action
+from dvadmin.utils.viewset import CustomModelViewSet
+from dvadmin.utils.json_response import DetailResponse
+
+class DataPermissionRuleViewSet(CustomModelViewSet):
+    """
+    数据权限规则管理
+    """
+    queryset = SomeModel.objects.all()
+    serializer_class = SomeSerializer
+    
+    @action(methods=['GET'], detail=False)
+    def get_field_options(self, request):
+        """获取字段选项"""
+        return DetailResponse(data=[], msg="获取成功")
+```
+
+## 文件头部注释规范
+
+每个文件必须包含标准头部注释：
+
+```python
+'''
+Description: 文件功能描述
+Version: 1.0
+Author: 开发者姓名
+Date: YYYY-MM-DD HH:MM:SS
+LastEditors: 最后修改者
+LastEditTime: YYYY-MM-DD HH:MM:SS
+'''
+```
+
+或者使用详细格式：
+
+```python
+# -*- coding: utf-8 -*-
+
+"""
+文件功能描述
+包含模块功能说明
+
+@author: 开发者姓名
+@Created on: YYYY-MM-DD HH:MM:SS
+@Remark: 特别说明
+"""
+```
+
+## 测试规范
+
+### 测试文件结构
+
+```python
+'''
+Description: 模型测试
+Version: 1.0
+Author: 开发者姓名
+Date: YYYY-MM-DD
+LastEditors: 
+LastEditTime: YYYY-MM-DD
+'''
+from django.test import TestCase
+from .models import YourModel
+
+class YourModelTestCase(TestCase):
+    """模型测试类"""
+    
+    def setUp(self):
+        """测试准备"""
+        pass
+    
+    def test_model_creation(self):
+        """测试模型创建"""
+        pass
+```
+
+## 导入规范
+
+### 导入顺序
+
+```python
+# 1. 标准库导入
+import os
+import logging
+
+# 2. 第三方库导入
+from django.db import models
+from rest_framework import serializers
+
+# 3. Django相关导入
+from django.db import transaction
+
+# 4. 项目内部导入
+from dvadmin.utils.viewset import CustomModelViewSet
+from dvadmin_twodev.baseentity.models import BaseDataModel
+from dvadmin_twodev.constants import business_constants
+
+# 5. 当前模块导入
+from .models import YourModel
+from .serializers import YourModelSerializer
+```
+
+## 命名规范总结
+
+| 类型 | 规范 | 示例 |
+|------|------|------|
+| 模型类 | 大驼峰 + Model | `DistrictModel`, `TxGridOdModel` |
+| 视图集 | 大驼峰 + ViewSet | `DistrictModelViewSet` |
+| 序列化器 | 大驼峰 + Serializer | `DistrictModelSerializer` |
+| 常量 | 全大写下划线 | `DEFAULT_GRID_SIZE`, `STATUS_CHOICES` |
+| 方法/函数 | 小写 + 下划线 | `get_total_person_times` |
+| 文件 | 小写 + 下划线 | `grid_od.py`, `geo_utils.py` |
+| 模块目录 | 小写 + 下划线 | `basedata/`, `grid_od/` |
+
+## 最佳实践
+
+1. **继承BaseDataModel**: 所有业务模型必须继承BaseDataModel
+2. **使用CustomModelViewSet**: 所有视图集必须继承CustomModelViewSet  
+3. **事务保护**: 涉及数据库写入的自定义方法使用 `@transaction.atomic`
+4. **响应格式统一**: 使用SuccessResponse/ErrorResponse返回统一格式
+5. **工具类复用**: 优先使用项目提供的工具类
+6. **常量统一管理**: 使用constants模块统一管理常量
+7. **完整的注释**: 文件、类、方法都要有清晰的中文注释
+8. **软删除**: 使用delete_mark字段实现软删除逻辑
+9. **审计字段**: 利用BaseDataModel提供的审计字段追踪数据变更
+10. **测试覆盖**: 重要的业务逻辑编写单元测试

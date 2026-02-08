@@ -1,0 +1,1172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>公交广告智擎 - 软件设计方案</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        :root {
+            --primary-color: #1890ff;
+            --success-color: #52c41a;
+            --warning-color: #faad14;
+            --error-color: #ff4d4f;
+            --text-color: #333;
+            --text-secondary: #666;
+            --border-color: #e8e8e8;
+            --bg-color: #f5f7fa;
+            --sidebar-width: 280px;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+            font-size: 14px;
+            line-height: 1.6;
+            color: var(--text-color);
+            background: var(--bg-color);
+        }
+
+        /* 头部 */
+        .header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 60px;
+            background: linear-gradient(135deg, #1890ff 0%, #096dd9 100%);
+            color: white;
+            display: flex;
+            align-items: center;
+            padding: 0 24px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            z-index: 1000;
+        }
+
+        .header h1 {
+            font-size: 20px;
+            font-weight: 500;
+        }
+
+        .header .version {
+            margin-left: 12px;
+            padding: 2px 8px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .header-nav {
+            margin-left: auto;
+            display: flex;
+            gap: 8px;
+        }
+
+        .header-nav a {
+            color: white;
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+
+        .header-nav a:hover,
+        .header-nav a.active {
+            background: rgba(255,255,255,0.2);
+        }
+
+        /* 侧边栏 */
+        .sidebar {
+            position: fixed;
+            top: 60px;
+            left: 0;
+            width: var(--sidebar-width);
+            height: calc(100vh - 60px);
+            background: white;
+            border-right: 1px solid var(--border-color);
+            overflow-y: auto;
+            z-index: 100;
+        }
+
+        .sidebar-content {
+            padding: 16px 0;
+        }
+
+        .nav-title {
+            padding: 8px 20px;
+            font-size: 12px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .nav-item {
+            display: block;
+            padding: 10px 20px;
+            color: var(--text-color);
+            text-decoration: none;
+            transition: all 0.2s;
+            border-left: 3px solid transparent;
+            cursor: pointer;
+        }
+
+        .nav-item:hover {
+            background: var(--bg-color);
+            color: var(--primary-color);
+        }
+
+        .nav-item.active {
+            background: #e6f7ff;
+            color: var(--primary-color);
+            border-left-color: var(--primary-color);
+        }
+
+        .nav-item.level-2 {
+            padding-left: 36px;
+            font-size: 13px;
+        }
+
+        /* 主内容区 */
+        .main {
+            margin-left: var(--sidebar-width);
+            margin-top: 60px;
+            padding: 32px 48px;
+            min-height: calc(100vh - 60px);
+        }
+
+        .content {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 40px 48px;
+            border-radius: 8px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+        }
+
+        /* 页面标题 */
+        .page-title {
+            font-size: 28px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #1a1a1a;
+        }
+
+        .page-subtitle {
+            font-size: 14px;
+            color: var(--text-secondary);
+            margin-bottom: 32px;
+        }
+
+        /* 分隔线 */
+        .divider {
+            height: 1px;
+            background: var(--border-color);
+            margin: 32px 0;
+        }
+
+        /* ==================== 流程图样式 ==================== */
+        .flowchart-container {
+            margin: 32px 0;
+            padding: 32px;
+            background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+            border-radius: 12px;
+            overflow-x: auto;
+        }
+
+        .flowchart-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 24px;
+            color: #1a1a1a;
+            text-align: center;
+        }
+
+        /* 主流程 */
+        .flow-main {
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+            gap: 0;
+            flex-wrap: nowrap;
+            min-width: max-content;
+            padding: 20px 0;
+        }
+
+        /* 流程节点 */
+        .flow-node {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+        }
+
+        .flow-node-box {
+            padding: 16px 24px;
+            border-radius: 8px;
+            font-weight: 500;
+            font-size: 14px;
+            text-align: center;
+            min-width: 120px;
+            position: relative;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .flow-node-box:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+
+        /* 节点类型 */
+        .flow-node-box.start {
+            background: linear-gradient(135deg, #52c41a 0%, #389e0d 100%);
+            color: white;
+            border-radius: 24px;
+        }
+
+        .flow-node-box.end {
+            background: linear-gradient(135deg, #ff4d4f 0%, #cf1322 100%);
+            color: white;
+            border-radius: 24px;
+        }
+
+        .flow-node-box.end.success {
+            background: linear-gradient(135deg, #52c41a 0%, #389e0d 100%);
+        }
+
+        .flow-node-box.process {
+            background: linear-gradient(135deg, #1890ff 0%, #096dd9 100%);
+            color: white;
+        }
+
+        .flow-node-box.decision {
+            background: linear-gradient(135deg, #faad14 0%, #d48806 100%);
+            color: white;
+            transform: rotate(0deg);
+        }
+
+        .flow-node-box.subprocess {
+            background: linear-gradient(135deg, #722ed1 0%, #531dab 100%);
+            color: white;
+        }
+
+        .flow-node-box.parallel {
+            background: linear-gradient(135deg, #13c2c2 0%, #08979c 100%);
+            color: white;
+        }
+
+        /* 节点描述 */
+        .flow-node-desc {
+            margin-top: 8px;
+            font-size: 12px;
+            color: var(--text-secondary);
+            max-width: 140px;
+            text-align: center;
+            line-height: 1.4;
+        }
+
+        /* 箭头连线 */
+        .flow-arrow {
+            display: flex;
+            align-items: center;
+            padding: 0 8px;
+            color: #999;
+            font-size: 20px;
+            height: 48px;
+        }
+
+        .flow-arrow::after {
+            content: "→";
+            font-size: 24px;
+            color: #bbb;
+        }
+
+        .flow-arrow.down::after {
+            content: "↓";
+        }
+
+        /* 分支容器 */
+        .flow-branch {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+        }
+
+        .flow-branch-label {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+            padding: 2px 8px;
+            background: #fff;
+            border-radius: 4px;
+        }
+
+        .flow-branch-content {
+            display: flex;
+            gap: 24px;
+        }
+
+        .flow-branch-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        /* 并行分支样式 */
+        .parallel-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background: rgba(19, 194, 194, 0.1);
+            border: 2px dashed #13c2c2;
+            border-radius: 12px;
+            padding: 16px 24px;
+            margin: 0 8px;
+        }
+
+        .parallel-title {
+            font-size: 12px;
+            color: #08979c;
+            margin-bottom: 12px;
+            font-weight: 500;
+        }
+
+        .parallel-nodes {
+            display: flex;
+            gap: 16px;
+        }
+
+        .parallel-node {
+            background: white;
+            padding: 12px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            border-left: 3px solid #13c2c2;
+        }
+
+        /* 操作列表 */
+        .flow-actions {
+            margin-top: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .flow-action {
+            font-size: 11px;
+            padding: 4px 8px;
+            background: rgba(255,255,255,0.9);
+            border-radius: 4px;
+            color: #666;
+        }
+
+        .flow-action.approve {
+            border-left: 2px solid #52c41a;
+        }
+
+        .flow-action.reject {
+            border-left: 2px solid #ff4d4f;
+        }
+
+        .flow-action.edit {
+            border-left: 2px solid #1890ff;
+        }
+
+        /* 流程说明区域 */
+        .flow-legend {
+            display: flex;
+            justify-content: center;
+            gap: 24px;
+            margin-top: 24px;
+            padding-top: 24px;
+            border-top: 1px dashed var(--border-color);
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .legend-color {
+            width: 16px;
+            height: 16px;
+            border-radius: 4px;
+        }
+
+        .legend-color.start { background: linear-gradient(135deg, #52c41a 0%, #389e0d 100%); }
+        .legend-color.process { background: linear-gradient(135deg, #1890ff 0%, #096dd9 100%); }
+        .legend-color.parallel { background: linear-gradient(135deg, #13c2c2 0%, #08979c 100%); }
+        .legend-color.end-success { background: linear-gradient(135deg, #52c41a 0%, #389e0d 100%); }
+        .legend-color.end-fail { background: linear-gradient(135deg, #ff4d4f 0%, #cf1322 100%); }
+
+        /* ==================== 详细流程卡片 ==================== */
+        .process-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 24px;
+            margin-top: 32px;
+        }
+
+        .process-card {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            border-top: 4px solid var(--primary-color);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .process-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+        }
+
+        .process-card.step-1 { border-top-color: #52c41a; }
+        .process-card.step-2 { border-top-color: #1890ff; }
+        .process-card.step-3 { border-top-color: #13c2c2; }
+        .process-card.step-4 { border-top-color: #722ed1; }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .card-step {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: var(--primary-color);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .step-1 .card-step { background: #52c41a; }
+        .step-2 .card-step { background: #1890ff; }
+        .step-3 .card-step { background: #13c2c2; }
+        .step-4 .card-step { background: #722ed1; }
+
+        .card-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #1a1a1a;
+        }
+
+        .card-role {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 2px;
+        }
+
+        .card-content {
+            font-size: 13px;
+            color: var(--text-secondary);
+            line-height: 1.7;
+        }
+
+        .card-content ul {
+            margin: 12px 0;
+            padding-left: 20px;
+        }
+
+        .card-content li {
+            margin-bottom: 6px;
+        }
+
+        .card-actions {
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .action-tag {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            margin-right: 8px;
+            margin-bottom: 8px;
+        }
+
+        .action-tag.success {
+            background: #f6ffed;
+            color: #52c41a;
+            border: 1px solid #b7eb8f;
+        }
+
+        .action-tag.danger {
+            background: #fff2f0;
+            color: #ff4d4f;
+            border: 1px solid #ffccc7;
+        }
+
+        .action-tag.info {
+            background: #e6f7ff;
+            color: #1890ff;
+            border: 1px solid #91d5ff;
+        }
+
+        .action-tag.warning {
+            background: #fffbe6;
+            color: #faad14;
+            border: 1px solid #ffe58f;
+        }
+
+        /* ==================== 状态流转表格 ==================== */
+        .status-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 24px;
+            font-size: 13px;
+        }
+
+        .status-table th {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 16px;
+            text-align: left;
+            font-weight: 500;
+        }
+
+        .status-table th:first-child {
+            border-radius: 8px 0 0 0;
+        }
+
+        .status-table th:last-child {
+            border-radius: 0 8px 0 0;
+        }
+
+        .status-table td {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .status-table tr:hover td {
+            background: #fafafa;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .status-badge.draft { background: #f5f5f5; color: #666; }
+        .status-badge.pending { background: #e6f7ff; color: #1890ff; }
+        .status-badge.reviewing { background: #fff7e6; color: #fa8c16; }
+        .status-badge.approved { background: #f6ffed; color: #52c41a; }
+        .status-badge.rejected { background: #fff2f0; color: #ff4d4f; }
+
+        /* ==================== Markdown 内容样式 ==================== */
+        .markdown-content h1 {
+            font-size: 28px;
+            font-weight: 600;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 2px solid var(--primary-color);
+        }
+
+        .markdown-content h2 {
+            font-size: 22px;
+            font-weight: 600;
+            margin-top: 48px;
+            margin-bottom: 20px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--primary-color);
+        }
+
+        .markdown-content h3 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-top: 32px;
+            margin-bottom: 16px;
+        }
+
+        .markdown-content h4 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-top: 24px;
+            margin-bottom: 12px;
+        }
+
+        .markdown-content p {
+            margin-bottom: 16px;
+            line-height: 1.8;
+        }
+
+        .markdown-content ul, .markdown-content ol {
+            margin-bottom: 16px;
+            padding-left: 24px;
+        }
+
+        .markdown-content li {
+            margin-bottom: 8px;
+        }
+
+        .markdown-content code {
+            background: #f6f8fa;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'SFMono-Regular', Consolas, monospace;
+            font-size: 13px;
+            color: #e83e8c;
+        }
+
+        .markdown-content pre {
+            background: #282c34;
+            color: #abb2bf;
+            padding: 20px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin-bottom: 20px;
+        }
+
+        .markdown-content pre code {
+            background: none;
+            padding: 0;
+            color: inherit;
+        }
+
+        .markdown-content table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            font-size: 13px;
+        }
+
+        .markdown-content th {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 16px;
+            text-align: left;
+        }
+
+        .markdown-content td {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .markdown-content blockquote {
+            border-left: 4px solid var(--primary-color);
+            padding: 12px 20px;
+            margin: 16px 0;
+            background: #f0f7ff;
+            border-radius: 0 4px 4px 0;
+        }
+
+        .markdown-content hr {
+            border: none;
+            height: 1px;
+            background: var(--border-color);
+            margin: 40px 0;
+        }
+
+        /* 回到顶部 */
+        .back-to-top {
+            position: fixed;
+            bottom: 40px;
+            right: 40px;
+            width: 44px;
+            height: 44px;
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 20px;
+            box-shadow: 0 4px 12px rgba(24, 144, 255, 0.4);
+            transition: all 0.3s;
+            opacity: 0;
+            visibility: hidden;
+        }
+
+        .back-to-top.visible {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        /* Tab 切换 */
+        .tab-container {
+            margin-bottom: 24px;
+        }
+
+        .tab-buttons {
+            display: flex;
+            gap: 4px;
+            background: #f5f5f5;
+            padding: 4px;
+            border-radius: 8px;
+            width: fit-content;
+        }
+
+        .tab-btn {
+            padding: 8px 20px;
+            border: none;
+            background: transparent;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            color: var(--text-secondary);
+            transition: all 0.2s;
+        }
+
+        .tab-btn:hover {
+            color: var(--primary-color);
+        }
+
+        .tab-btn.active {
+            background: white;
+            color: var(--primary-color);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        /* 加载动画 */
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 200px;
+            color: var(--text-secondary);
+        }
+
+        @media print {
+            .header, .sidebar, .back-to-top, .tab-buttons {
+                display: none;
+            }
+            .main {
+                margin: 0;
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <h1>公交广告智擎</h1>
+        <span class="version">v1.6</span>
+        <nav class="header-nav">
+            <a href="#" class="active" onclick="showTab('flowchart')">流程图</a>
+            <a href="#" onclick="showTab('document')">完整文档</a>
+        </nav>
+    </header>
+
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-content">
+            <div class="nav-title">预订单流程</div>
+            <a class="nav-item active" onclick="scrollToSection('overview')">流程概览</a>
+            <a class="nav-item level-2" onclick="scrollToSection('step1')">1. 提交阶段</a>
+            <a class="nav-item level-2" onclick="scrollToSection('step2')">2. 媒体部初审</a>
+            <a class="nav-item level-2" onclick="scrollToSection('step3')">3. 营运公司审核</a>
+            <a class="nav-item level-2" onclick="scrollToSection('step4')">4. 媒体部复审</a>
+            <a class="nav-item" onclick="scrollToSection('status')">状态流转</a>
+            <a class="nav-item" onclick="scrollToSection('rules')">业务规则</a>
+            <div class="nav-title" style="margin-top: 24px;">其他模块</div>
+            <a class="nav-item" onclick="showTab('document')">完整设计文档</a>
+        </div>
+    </aside>
+
+    <main class="main">
+        <!-- 流程图页面 -->
+        <div id="flowchart-tab" class="tab-content active">
+            <article class="content">
+                <h1 class="page-title">预订单审批流程</h1>
+                <p class="page-subtitle">代理商/自营预订单从提交到通过的完整审批流程</p>
+
+                <!-- 流程图 -->
+                <section id="overview">
+                    <div class="flowchart-container">
+                        <div class="flowchart-title">预订单审批流程图</div>
+                        <div class="flow-main">
+                            <!-- 开始 -->
+                            <div class="flow-node">
+                                <div class="flow-node-box start">提交预订单</div>
+                                <div class="flow-node-desc">代理商/自营<br>填写订单信息</div>
+                            </div>
+
+                            <div class="flow-arrow"></div>
+
+                            <!-- 系统处理 -->
+                            <div class="flow-node">
+                                <div class="flow-node-box subprocess">系统自动处理</div>
+                                <div class="flow-node-desc">生成车位广告<br>锁定资源</div>
+                            </div>
+
+                            <div class="flow-arrow"></div>
+
+                            <!-- 媒体部初审 -->
+                            <div class="flow-node">
+                                <div class="flow-node-box process">媒体部初审</div>
+                                <div class="flow-node-desc">审核资源分配<br>可增删改车位</div>
+                                <div class="flow-actions">
+                                    <span class="flow-action approve">通过 →</span>
+                                    <span class="flow-action reject">驳回 → 结束</span>
+                                </div>
+                            </div>
+
+                            <div class="flow-arrow"></div>
+
+                            <!-- 营运公司会签 -->
+                            <div class="flow-node">
+                                <div class="parallel-container">
+                                    <div class="parallel-title">会签模式（并行审批）</div>
+                                    <div class="parallel-nodes">
+                                        <div class="parallel-node">营运公司A</div>
+                                        <div class="parallel-node">营运公司B</div>
+                                        <div class="parallel-node">营运公司...</div>
+                                    </div>
+                                </div>
+                                <div class="flow-node-desc" style="margin-top: 12px;">确认/换车/剔除<br>所有公司完成后继续</div>
+                            </div>
+
+                            <div class="flow-arrow"></div>
+
+                            <!-- 媒体部复审 -->
+                            <div class="flow-node">
+                                <div class="flow-node-box process">媒体部复审</div>
+                                <div class="flow-node-desc">最终审核确认<br>可增删改车位</div>
+                                <div class="flow-actions">
+                                    <span class="flow-action approve">通过 →</span>
+                                    <span class="flow-action reject">驳回 → 结束</span>
+                                </div>
+                            </div>
+
+                            <div class="flow-arrow"></div>
+
+                            <!-- 结束 -->
+                            <div class="flow-node">
+                                <div class="flow-node-box end success">审批通过</div>
+                                <div class="flow-node-desc">订单生效<br>等待上刊</div>
+                            </div>
+                        </div>
+
+                        <!-- 图例 -->
+                        <div class="flow-legend">
+                            <div class="legend-item">
+                                <div class="legend-color start"></div>
+                                <span>开始/提交</span>
+                            </div>
+                            <div class="legend-item">
+                                <div class="legend-color process"></div>
+                                <span>审批节点</span>
+                            </div>
+                            <div class="legend-item">
+                                <div class="legend-color parallel"></div>
+                                <span>并行会签</span>
+                            </div>
+                            <div class="legend-item">
+                                <div class="legend-color end-success"></div>
+                                <span>通过</span>
+                            </div>
+                            <div class="legend-item">
+                                <div class="legend-color end-fail"></div>
+                                <span>驳回</span>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <div class="divider"></div>
+
+                <!-- 详细步骤卡片 -->
+                <h2 style="font-size: 20px; margin-bottom: 24px;">流程节点详解</h2>
+
+                <div class="process-cards">
+                    <!-- 步骤1 -->
+                    <div class="process-card step-1" id="step1">
+                        <div class="card-header">
+                            <div class="card-step">1</div>
+                            <div>
+                                <div class="card-title">提交阶段</div>
+                                <div class="card-role">代理商 / 媒体部业务专员</div>
+                            </div>
+                        </div>
+                        <div class="card-content">
+                            <p>填写预订单信息后点击提交，系统自动执行：</p>
+                            <ul>
+                                <li><strong>生成车位广告</strong>：根据预订明细自动分配车辆</li>
+                                <li><strong>锁定资源</strong>：创建排期数据，状态设为"预订"</li>
+                                <li><strong>校验规则</strong>：检查授权车辆数、资源冲突</li>
+                            </ul>
+                        </div>
+                        <div class="card-actions">
+                            <span class="action-tag info">自动生成</span>
+                            <span class="action-tag warning">超限提醒</span>
+                        </div>
+                    </div>
+
+                    <!-- 步骤2 -->
+                    <div class="process-card step-2" id="step2">
+                        <div class="card-header">
+                            <div class="card-step">2</div>
+                            <div>
+                                <div class="card-title">媒体部初审</div>
+                                <div class="card-role">媒体部业务专员</div>
+                            </div>
+                        </div>
+                        <div class="card-content">
+                            <p>审核资源分配情况，可执行以下操作：</p>
+                            <ul>
+                                <li><strong>查看</strong>：查看所有车位广告</li>
+                                <li><strong>调整</strong>：新增/删除/修改车位广告</li>
+                                <li><strong>审批</strong>：通过或驳回订单</li>
+                            </ul>
+                            <p style="margin-top: 12px; color: #ff4d4f; font-size: 12px;">* 驳回后资源自动释放，订单可重新发起</p>
+                        </div>
+                        <div class="card-actions">
+                            <span class="action-tag success">通过</span>
+                            <span class="action-tag danger">驳回</span>
+                            <span class="action-tag info">增删改</span>
+                        </div>
+                    </div>
+
+                    <!-- 步骤3 -->
+                    <div class="process-card step-3" id="step3">
+                        <div class="card-header">
+                            <div class="card-step">3</div>
+                            <div>
+                                <div class="card-title">营运公司审核</div>
+                                <div class="card-role">各营运公司广告专员</div>
+                            </div>
+                        </div>
+                        <div class="card-content">
+                            <p><strong>会签模式</strong>：涉及几家公司，就发给几家</p>
+                            <ul>
+                                <li><strong>确认</strong>：打勾确认车位广告</li>
+                                <li><strong>换车</strong>：只能更换同线路的其他车辆</li>
+                                <li><strong>剔除</strong>：剔除车位，需填写原因</li>
+                            </ul>
+                            <p style="margin-top: 12px; color: #13c2c2; font-size: 12px;">* 只能操作本公司的车位，不能改媒体类型</p>
+                        </div>
+                        <div class="card-actions">
+                            <span class="action-tag success">确认</span>
+                            <span class="action-tag info">换车</span>
+                            <span class="action-tag warning">剔除</span>
+                        </div>
+                    </div>
+
+                    <!-- 步骤4 -->
+                    <div class="process-card step-4" id="step4">
+                        <div class="card-header">
+                            <div class="card-step">4</div>
+                            <div>
+                                <div class="card-title">媒体部复审</div>
+                                <div class="card-role">媒体部业务专员</div>
+                            </div>
+                        </div>
+                        <div class="card-content">
+                            <p>最终审核，操作权限与初审相同：</p>
+                            <ul>
+                                <li>查看营运公司的确认/剔除情况</li>
+                                <li>可继续调整车位广告</li>
+                                <li>通过后订单正式生效</li>
+                            </ul>
+                        </div>
+                        <div class="card-actions">
+                            <span class="action-tag success">通过 → 生效</span>
+                            <span class="action-tag danger">驳回 → 释放资源</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="divider"></div>
+
+                <!-- 状态流转 -->
+                <section id="status">
+                    <h2 style="font-size: 20px; margin-bottom: 24px;">预订单状态流转</h2>
+                    <table class="status-table">
+                        <thead>
+                            <tr>
+                                <th>状态值</th>
+                                <th>状态名称</th>
+                                <th>说明</th>
+                                <th>可执行操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>1</td>
+                                <td><span class="status-badge draft">草稿</span></td>
+                                <td>创建中，未提交</td>
+                                <td>编辑、提交、删除</td>
+                            </tr>
+                            <tr>
+                                <td>2</td>
+                                <td><span class="status-badge pending">待媒体部初审</span></td>
+                                <td>已提交，等待媒体部初审</td>
+                                <td>媒体部：通过/驳回/调整</td>
+                            </tr>
+                            <tr>
+                                <td>3</td>
+                                <td><span class="status-badge reviewing">待营运公司审核</span></td>
+                                <td>媒体部初审通过，等待营运公司</td>
+                                <td>营运公司：确认/换车/剔除</td>
+                            </tr>
+                            <tr>
+                                <td>4</td>
+                                <td><span class="status-badge pending">待媒体部复审</span></td>
+                                <td>营运公司审核完成，等待复审</td>
+                                <td>媒体部：通过/驳回/调整</td>
+                            </tr>
+                            <tr>
+                                <td>5</td>
+                                <td><span class="status-badge approved">已通过</span></td>
+                                <td>审批全部通过，订单生效</td>
+                                <td>等待上刊</td>
+                            </tr>
+                            <tr>
+                                <td>7</td>
+                                <td><span class="status-badge rejected">已驳回</span></td>
+                                <td>审批被拒绝，订单终止</td>
+                                <td>重新发起（复制订单）</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </section>
+
+                <div class="divider"></div>
+
+                <!-- 业务规则 -->
+                <section id="rules">
+                    <h2 style="font-size: 20px; margin-bottom: 24px;">资源锁定规则</h2>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+                        <div style="background: #f6ffed; border: 1px solid #b7eb8f; border-radius: 8px; padding: 20px;">
+                            <h3 style="color: #52c41a; margin-bottom: 12px; font-size: 16px;">整车锁定模式（默认）</h3>
+                            <p style="font-size: 13px; color: #666; line-height: 1.7;">
+                                一辆车被预订后，在投放周期内<strong>整车锁定</strong>，不能再做任何其他广告。
+                            </p>
+                            <div style="margin-top: 12px; padding: 8px 12px; background: white; border-radius: 4px; font-size: 12px;">
+                                <code>RESOURCE_LOCK_MODE = 'vehicle'</code>
+                            </div>
+                        </div>
+
+                        <div style="background: #e6f7ff; border: 1px solid #91d5ff; border-radius: 8px; padding: 20px;">
+                            <h3 style="color: #1890ff; margin-bottom: 12px; font-size: 16px;">资源位锁定模式（可配置）</h3>
+                            <p style="font-size: 13px; color: #666; line-height: 1.7;">
+                                只锁定具体资源位，同一辆车可被多个订单共用（资源位不冲突即可）。
+                            </p>
+                            <div style="margin-top: 12px; padding: 8px 12px; background: white; border-radius: 4px; font-size: 12px;">
+                                <code>RESOURCE_LOCK_MODE = 'position'</code>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 24px; padding: 16px; background: #fffbe6; border: 1px solid #ffe58f; border-radius: 8px;">
+                        <h4 style="color: #d48806; margin-bottom: 8px; font-size: 14px;">其他校验规则</h4>
+                        <ul style="font-size: 13px; color: #666; padding-left: 20px; margin: 0;">
+                            <li>代理商授权车辆数校验：超过 <code>auth_ad_bus_count</code> 时显示警告</li>
+                            <li>媒体类型冲突检测：检查基础资源位是否在时间段内被占用</li>
+                        </ul>
+                    </div>
+                </section>
+            </article>
+        </div>
+
+        <!-- 完整文档页面 -->
+        <div id="document-tab" class="tab-content">
+            <article class="content markdown-content" id="markdown-content">
+                <div class="loading">正在加载文档...</div>
+            </article>
+        </div>
+    </main>
+
+    <button class="back-to-top" id="backToTop" title="回到顶部">↑</button>
+
+    <script>
+        // Tab 切换
+        function showTab(tabName) {
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.querySelectorAll('.header-nav a').forEach(link => {
+                link.classList.remove('active');
+            });
+
+            document.getElementById(tabName + '-tab').classList.add('active');
+            event.target.classList.add('active');
+
+            if (tabName === 'document' && !window.markdownLoaded) {
+                loadMarkdown();
+            }
+        }
+
+        // 滚动到指定区域
+        function scrollToSection(sectionId) {
+            const section = document.getElementById(sectionId);
+            if (section) {
+                window.scrollTo({
+                    top: section.offsetTop - 80,
+                    behavior: 'smooth'
+                });
+            }
+        }
+
+        // 加载 Markdown 文档
+        async function loadMarkdown() {
+            try {
+                const response = await fetch('./软件设计v1.md');
+                if (!response.ok) throw new Error('文件加载失败');
+                const markdown = await response.text();
+
+                marked.setOptions({
+                    gfm: true,
+                    breaks: true,
+                    headerIds: true,
+                    mangle: false
+                });
+
+                document.getElementById('markdown-content').innerHTML = marked.parse(markdown);
+                window.markdownLoaded = true;
+            } catch (error) {
+                document.getElementById('markdown-content').innerHTML = `
+                    <div style="text-align: center; padding: 60px;">
+                        <h2 style="color: #ff4d4f;">文档加载失败</h2>
+                        <p style="color: #666; margin-top: 16px;">${error.message}</p>
+                        <p style="color: #999; margin-top: 8px; font-size: 13px;">请使用 HTTP 服务器打开（如 python -m http.server）</p>
+                    </div>
+                `;
+            }
+        }
+
+        // 回到顶部
+        const backToTop = document.getElementById('backToTop');
+        window.addEventListener('scroll', () => {
+            if (window.scrollY > 300) {
+                backToTop.classList.add('visible');
+            } else {
+                backToTop.classList.remove('visible');
+            }
+        });
+
+        backToTop.addEventListener('click', () => {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+    </script>
+</body>
+</html>

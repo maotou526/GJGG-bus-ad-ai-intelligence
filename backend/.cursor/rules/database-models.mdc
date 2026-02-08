@@ -1,0 +1,420 @@
+---
+globs: *.py
+description: 数据库模型和Django ORM使用规范
+---
+
+# 数据库模型和Django ORM 规范
+
+## 模型定义规范
+
+### 基础模型继承
+所有业务模型必须继承[CoreModel](mdc:dvladmin/utils/models.py)基类：
+
+```python
+from dvladmin.utils.models import CoreModel, table_prefix
+
+class UserProfile(CoreModel):
+    """用户档案模型"""
+    # 模型字段定义
+    
+    class Meta:
+        db_table = table_prefix + "user_profile"
+        verbose_name = "用户档案"
+        verbose_name_plural = verbose_name
+        ordering = ['-create_datetime']
+```
+
+### CoreModel 提供的功能
+- **自动审计字段**: create_datetime, update_datetime, creator, modifier
+- **软删除支持**: is_deleted字段和软删除管理器
+- **通用查询方法**: 提供常用的查询和操作方法
+
+### 字段定义规范
+
+#### 必要属性
+每个字段都必须包含：
+- `verbose_name`: 字段的中文名称
+- `help_text`: 字段的帮助说明
+- 适当的验证规则
+
+```python
+class Users(CoreModel):
+    """用户模型"""
+    username = models.CharField(
+        max_length=150, 
+        unique=True, 
+        db_index=True, 
+        verbose_name="用户账号",
+        help_text="用户登录账号，必须唯一"
+    )
+    name = models.CharField(
+        max_length=40, 
+        verbose_name="姓名", 
+        help_text="用户真实姓名"
+    )
+    status = models.BooleanField(
+        default=True, 
+        verbose_name="状态", 
+        help_text="用户状态：True=启用，False=禁用"
+    )
+```
+
+#### 字段类型选择指南
+- **字符串**: CharField (有长度限制) 或 TextField (无长度限制)
+- **整数**: IntegerField, PositiveIntegerField, BigIntegerField
+- **小数**: DecimalField (金额等精确小数)
+- **浮点数**: FloatField (一般数值)
+- **布尔值**: BooleanField
+- **日期时间**: DateTimeField, DateField, TimeField
+- **文件**: FileField, ImageField
+- **外键**: ForeignKey, OneToOneField, ManyToManyField
+
+### 关联关系规范
+
+#### 外键关系
+```python
+class UserProfile(CoreModel):
+    """用户档案"""
+    user = models.OneToOneField(
+        'system.Users',  # 使用字符串引用避免循环导入
+        on_delete=models.CASCADE,
+        verbose_name="关联用户",
+        help_text="关联的用户账号"
+    )
+    dept = models.ForeignKey(
+        'system.Dept',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name="部门",
+        help_text="用户所属部门"
+    )
+```
+
+#### 多对多关系
+```python
+class Users(CoreModel):
+    """用户模型"""
+    role = models.ManyToManyField(
+        'system.Role',
+        verbose_name="角色",
+        help_text="用户拥有的角色",
+        blank=True
+    )
+```
+
+#### 删除行为选择
+- `CASCADE`: 级联删除（谨慎使用）
+- `SET_NULL`: 设置为NULL（推荐）
+- `SET_DEFAULT`: 设置为默认值
+- `PROTECT`: 保护不删除
+- `DO_NOTHING`: 不做任何操作
+
+### Meta类配置
+
+#### 必要配置
+```python
+class Meta:
+    # 数据库表名（必须使用前缀）
+    db_table = table_prefix + "user_profile"
+    
+    # 模型显示名称
+    verbose_name = "用户档案"
+    verbose_name_plural = verbose_name
+    
+    # 默认排序
+    ordering = ['-create_datetime']
+    
+    # 数据库索引
+    indexes = [
+        models.Index(fields=['username']),
+        models.Index(fields=['create_datetime']),
+    ]
+    
+    # 唯一约束
+    unique_together = [['user', 'dept']]
+```
+
+## 查询优化规范
+
+### 避免N+1查询
+```python
+# 错误方式 - 会产生N+1查询
+users = Users.objects.all()
+for user in users:
+    print(user.dept.name)  # 每次访问都会查询数据库
+
+# 正确方式 - 使用select_related
+users = Users.objects.select_related('dept').all()
+for user in users:
+    print(user.dept.name)  # 一次查询解决
+
+# 对于多对多关系使用prefetch_related
+users = Users.objects.prefetch_related('role').all()
+for user in users:
+    for role in user.role.all():
+        print(role.name)
+```
+
+### 查询集优化
+```python
+# 只查询需要的字段
+users = Users.objects.only('id', 'username', 'name')
+
+# 排除不需要的字段
+users = Users.objects.defer('description', 'avatar')
+
+# 使用values和values_list
+user_data = Users.objects.values('id', 'username', 'name')
+usernames = Users.objects.values_list('username', flat=True)
+```
+
+### 聚合查询
+```python
+from django.db.models import Count, Sum, Avg, Max, Min
+
+# 统计查询
+user_count = Users.objects.count()
+role_stats = Users.objects.values('role__name').annotate(
+    user_count=Count('id')
+)
+
+# 分组统计
+dept_user_count = Users.objects.values('dept__name').annotate(
+    total_users=Count('id'),
+    active_users=Count('id', filter=models.Q(status=True))
+)
+```
+
+## 事务处理规范
+
+### 使用事务装饰器
+```python
+from django.db import transaction
+
+@transaction.atomic
+def create_user_with_profile(user_data, profile_data):
+    """原子性创建用户和档案"""
+    user = Users.objects.create(**user_data)
+    profile_data['user'] = user
+    UserProfile.objects.create(**profile_data)
+    return user
+
+# 或者使用上下文管理器
+def transfer_user_dept(user_id, new_dept_id):
+    """转移用户部门"""
+    with transaction.atomic():
+        user = Users.objects.select_for_update().get(id=user_id)
+        old_dept = user.dept
+        user.dept_id = new_dept_id
+        user.save()
+        
+        # 更新相关统计数据
+        update_dept_statistics(old_dept.id)
+        update_dept_statistics(new_dept_id)
+```
+
+### 事务回滚
+```python
+from django.db import transaction
+
+def risky_operation():
+    try:
+        with transaction.atomic():
+            # 执行可能失败的操作
+            Users.objects.create(username="test")
+            # 如果这里抛出异常，上面的创建会被回滚
+            raise Exception("Something went wrong")
+    except Exception as e:
+        # 处理异常
+        logger.error(f"操作失败: {e}")
+        return False
+    return True
+```
+
+## 软删除机制
+
+### 软删除查询
+项目使用软删除机制，继承CoreModel的模型会自动支持：
+
+```python
+# 普通查询会自动过滤已删除的记录
+active_users = Users.objects.all()
+
+# 查询包含已删除的记录
+all_users = Users.objects.filter(is_deleted=None)
+
+# 只查询已删除的记录  
+deleted_users = Users.objects.filter(is_deleted=True)
+
+# 软删除操作
+user.delete()  # 软删除
+
+# 硬删除操作（谨慎使用）
+user.hard_delete()
+```
+
+### 软删除最佳实践
+- 重要业务数据使用软删除
+- 定期清理长期软删除的数据
+- 在业务逻辑中考虑软删除的影响
+
+## 数据迁移规范
+
+### 创建迁移
+```bash
+# 创建迁移文件
+python manage.py makemigrations
+
+# 指定应用
+python manage.py makemigrations system
+
+# 空迁移文件
+python manage.py makemigrations --empty system
+```
+
+### 数据迁移
+```python
+# migrations/0002_migrate_user_data.py
+from django.db import migrations
+
+def migrate_user_data(apps, schema_editor):
+    """迁移用户数据"""
+    Users = apps.get_model('system', 'Users')
+    for user in Users.objects.all():
+        # 执行数据迁移逻辑
+        user.new_field = calculate_new_value(user)
+        user.save()
+
+def reverse_migrate_user_data(apps, schema_editor):
+    """回滚迁移"""
+    pass
+
+class Migration(migrations.Migration):
+    dependencies = [
+        ('system', '0001_initial'),
+    ]
+    
+    operations = [
+        migrations.RunPython(
+            migrate_user_data, 
+            reverse_migrate_user_data
+        ),
+    ]
+```
+
+## 模型方法规范
+
+### 自定义模型方法
+```python
+class Users(CoreModel):
+    """用户模型"""
+    
+    def get_full_name(self):
+        """获取用户全名"""
+        return f"{self.name}({self.username})"
+    
+    def is_admin(self):
+        """判断是否为管理员"""
+        return self.role.filter(key='admin').exists()
+    
+    def get_permissions(self):
+        """获取用户权限"""
+        permissions = set()
+        for role in self.role.all():
+            permissions.update(role.get_permissions())
+        return permissions
+    
+    @classmethod
+    def get_active_users(cls):
+        """获取活跃用户"""
+        return cls.objects.filter(status=True, is_deleted=False)
+    
+    def save(self, *args, **kwargs):
+        """重写保存方法"""
+        # 自定义保存逻辑
+        if not self.pk:  # 新创建的对象
+            self.username = self.username.lower()
+        super().save(*args, **kwargs)
+```
+
+### 模型验证
+```python
+from django.core.exceptions import ValidationError
+
+class Users(CoreModel):
+    def clean(self):
+        """模型验证"""
+        super().clean()
+        
+        # 用户名格式验证
+        if not self.username.isalnum():
+            raise ValidationError('用户名只能包含字母和数字')
+        
+        # 邮箱唯一性验证
+        if self.email:
+            existing = Users.objects.filter(email=self.email)
+            if self.pk:
+                existing = existing.exclude(pk=self.pk)
+            if existing.exists():
+                raise ValidationError('邮箱已被使用')
+```
+
+## 性能监控和优化
+
+### 数据库查询监控
+```python
+from django.db import connection
+from django.conf import settings
+
+if settings.DEBUG:
+    # 开发环境下监控查询
+    print(f"Query count: {len(connection.queries)}")
+    for query in connection.queries:
+        print(f"SQL: {query['sql']}")
+        print(f"Time: {query['time']}")
+```
+
+### 查询性能优化
+- 为频繁查询的字段添加索引
+- 使用explain分析查询执行计划
+- 避免在循环中执行查询
+- 使用批量操作替代逐条操作
+
+```python
+# 批量创建
+Users.objects.bulk_create([
+    Users(username=f"user{i}", name=f"User {i}")
+    for i in range(1000)
+])
+
+# 批量更新
+Users.objects.filter(status=False).update(status=True)
+```
+
+## 数据完整性保证
+
+### 约束和验证
+- 在数据库层面设置约束
+- 在模型层面进行验证
+- 在表单/序列化器层面进行输入验证
+
+### 数据一致性
+- 使用事务保证操作的原子性
+- 合理使用外键约束
+- 定期检查数据完整性
+
+```python
+# 数据一致性检查
+def check_data_integrity():
+    """检查数据完整性"""
+    # 检查孤立的用户档案
+    orphaned_profiles = UserProfile.objects.filter(user__isnull=True)
+    if orphaned_profiles.exists():
+        logger.warning(f"发现 {orphaned_profiles.count()} 个孤立的用户档案")
+    
+    # 检查用户角色关联
+    users_without_roles = Users.objects.filter(role__isnull=True)
+    if users_without_roles.exists():
+        logger.warning(f"发现 {users_without_roles.count()} 个没有角色的用户")
+```

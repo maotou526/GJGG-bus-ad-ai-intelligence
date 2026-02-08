@@ -1,0 +1,9 @@
+{
+    "version": 3,
+    "mappings": "AAAA,AAAA,QAAQ,CAAC;EACP,gBAAgB,EAAE,KAAkB;EAClC,aAAa,EAAE,IAAI;EACnB,MAAM,EAAE,eAAe;CAC1B",
+    "sources": [
+        "fastCrud.scss"
+    ],
+    "names": [],
+    "file": "fastCrud.css"
+}

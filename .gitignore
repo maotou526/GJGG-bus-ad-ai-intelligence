@@ -1,0 +1,16 @@
+/backend/venv
+/backend/.idea
+.idea
+
+.history/
+.vscode/
+web/package-lock.json
+
+*.bat
+
+/backend/**/*.cshtml
+/backend/**/*.cs
+/backend/**/*.js
+/backend/**/*.css
+需求文档/20260114上海公交广告公司智擎交通广告云脑平台建设方案.docx
+.claude/settings.local.json

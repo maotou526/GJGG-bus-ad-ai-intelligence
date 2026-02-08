@@ -1,0 +1,75 @@
+version: "3.8"
+services:
+  taicang-dvadmin3-web:
+    image: taicang-dvadmin3-web:1.0
+    container_name: taicang-dvadmin3-web
+    ports:
+      - "8080:8080"
+    build:
+      context: .
+      dockerfile: ./docker_env/web/Dockerfile
+    environment:
+      TZ: Asia/Shanghai
+      # 后端服务地址，使用服务名（Docker Compose 会自动解析）或 IP 地址
+      BACKEND_HOST: ${BACKEND_HOST:-taicang-dvadmin3-django}
+      BACKEND_PORT: ${BACKEND_PORT:-8000}
+    volumes:
+      - ./backend/media:/backend/media
+    restart: always
+    depends_on:
+      - taicang-dvadmin3-django
+    networks:
+      - dvadmin-network
+
+  taicang-dvadmin3-django:
+    image: taicang-dvadmin3-django:1.0
+    build:
+      context: .
+      dockerfile: ./docker_env/django/Dockerfile
+    container_name: taicang-dvadmin3-django
+    working_dir: /backend
+    environment:
+      PYTHONUNBUFFERED: 1
+      DJANGO_ENV: production
+      REDIS_HOST: 10.60.11.60
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      TZ: Asia/Shanghai
+    volumes:
+      - ./backend:/backend
+      - ./logs/log:/var/log
+      - ./backend/media:/backend/media
+    ports:
+      - "8000:8000"
+    restart: always
+    networks:
+      - dvadmin-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  taicang-dvadmin3-celery:
+    image: taicang-dvadmin3-celery:1.0
+    build:
+      context: .
+      dockerfile: ./docker_env/celery/Dockerfile
+    container_name: taicang-dvadmin3-celery
+    working_dir: /backend
+    environment:
+      PYTHONUNBUFFERED: 1
+      DJANGO_ENV: production
+      REDIS_HOST: 10.60.11.60
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      TZ: Asia/Shanghai
+    volumes:
+      - ./backend:/backend
+      - ./logs/log:/var/log
+    restart: always
+    networks:
+      - dvadmin-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+networks:
+  dvadmin-network:
+    driver: bridge

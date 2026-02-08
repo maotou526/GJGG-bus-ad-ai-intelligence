@@ -1,0 +1,24 @@
+.fs-crud-container .el-table thead {
+  color: #606266;
+}
+
+.fs-crud-container .el-input__inner::-webkit-input-placeholder {
+  color: #dcdfe6;
+  font-size: 12px;
+}
+
+.fs-crud-container .el-input__inner:-ms-input-placeholder {
+  color: #dcdfe6;
+  font-size: 12px;
+}
+
+.fs-crud-container .el-input__inner::-ms-input-placeholder {
+  color: #dcdfe6;
+  font-size: 12px;
+}
+
+.fs-crud-container .el-input__inner::placeholder {
+  color: #dcdfe6;
+  font-size: 12px;
+}
+/*# sourceMappingURL=reset.css.map */

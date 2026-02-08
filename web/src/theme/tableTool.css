@@ -1,0 +1,43 @@
+.table-tool-popper {
+  padding: 0 !important;
+}
+
+.table-tool-popper .tool-box {
+  display: -webkit-box;
+  display: -ms-flexbox;
+  display: flex;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  -webkit-box-sizing: border-box;
+          box-sizing: border-box;
+  color: var(--el-text-color-primary);
+  height: 40px;
+  -webkit-box-align: center;
+      -ms-flex-align: center;
+          align-items: center;
+}
+
+.table-tool-popper .tool-sortable {
+  max-height: 303px;
+}
+
+.table-tool-popper .tool-sortable .tool-sortable-item {
+  display: -webkit-box;
+  display: -ms-flexbox;
+  display: flex;
+  -webkit-box-sizing: border-box;
+          box-sizing: border-box;
+  color: var(--el-text-color-primary);
+  -webkit-box-align: center;
+      -ms-flex-align: center;
+          align-items: center;
+  padding: 0 12px;
+}
+
+.table-tool-popper .tool-sortable .tool-sortable-item:hover {
+  background: var(--el-fill-color-lighter);
+}
+
+.table-tool-popper .tool-sortable .tool-sortable-item i {
+  opacity: 0.7;
+}
+/*# sourceMappingURL=tableTool.css.map */

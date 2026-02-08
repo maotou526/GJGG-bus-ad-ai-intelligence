@@ -1,0 +1,69 @@
+# Node modules
+web/node_modules/
+node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+backend/venv/
+backend/.venv/
+backend/env/
+backend/.env
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Docker
+docker-compose.yml
+docker-compose.*.yml
+Dockerfile*
+.dockerignore
+
+# Logs
+logs/
+*.log
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+web/dist/
+web/.vite/
+web/.cache/
+
+# Media and static files (will be mounted as volumes)
+backend/media/
+backend/static/
+
+# Database
+*.db
+*.sqlite3
+backend/db.sqlite3
+
+# Other
+*.md
+README*
+LICENSE
+NOTICE
+

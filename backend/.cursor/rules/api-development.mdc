@@ -1,0 +1,327 @@
+---
+globs: *.py
+description: API开发和Django REST Framework使用规范
+---
+
+# API开发和Django REST Framework 规范
+
+## REST API 设计原则
+
+### RESTful URL 设计
+- 使用名词而非动词，如 `/api/users/` 而不是 `/api/getUsers/`
+- 使用HTTP方法表示操作：
+  - GET: 获取资源
+  - POST: 创建资源
+  - PUT: 完整更新资源
+  - PATCH: 部分更新资源
+  - DELETE: 删除资源
+- 使用复数形式的资源名，如 `/api/users/` 而不是 `/api/user/`
+- 嵌套资源要体现层级关系，如 `/api/users/{id}/roles/`
+
+### HTTP状态码规范
+- 200: 请求成功
+- 201: 创建成功
+- 204: 删除成功
+- 400: 请求参数错误
+- 401: 未认证
+- 403: 无权限
+- 404: 资源不存在
+- 500: 服务器错误
+
+## Django REST Framework 规范
+
+### ViewSet 开发规范
+- 继承[CustomModelViewSet](mdc:dvadmin/utils/viewset.py)基类
+- 明确定义queryset和serializer_class
+- 使用装饰器进行权限控制
+- 重写标准方法时调用父类方法
+
+```python
+from dvladmin.utils.viewset import CustomModelViewSet
+from dvladmin.utils.json_response import DetailResponse, SuccessResponse
+
+class UserViewSet(CustomModelViewSet):
+    """
+    用户管理ViewSet
+    提供用户的增删改查功能
+    """
+    queryset = Users.objects.all()
+    serializer_class = UserSerializer
+    filterset_fields = ['status', 'role']
+    search_fields = ['username', 'name', 'email']
+    ordering_fields = ['create_datetime', 'username']
+    
+    def list(self, request, *args, **kwargs):
+        """获取用户列表"""
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        
+        serializer = self.get_serializer(queryset, many=True)
+        return SuccessResponse(data=serializer.data, msg="获取成功")
+```
+
+### Serializer 开发规范
+- 继承ModelSerializer
+- 显式声明fields或exclude
+- 自定义验证方法使用validate_字段名格式
+- 复杂逻辑重写create和update方法
+
+```python
+from rest_framework import serializers
+from dvladmin.utils.serializers import CustomModelSerializer
+
+class UserSerializer(CustomModelSerializer):
+    """用户序列化器"""
+    
+    class Meta:
+        model = Users
+        fields = ['id', 'username', 'name', 'email', 'mobile', 'status']
+        read_only_fields = ['id', 'create_datetime', 'update_datetime']
+    
+    def validate_username(self, value):
+        """验证用户名唯一性"""
+        if self.instance and self.instance.username == value:
+            return value
+        if Users.objects.filter(username=value).exists():
+            raise serializers.ValidationError("用户名已存在")
+        return value
+    
+    def create(self, validated_data):
+        """创建用户"""
+        # 密码加密处理
+        password = validated_data.pop('password', None)
+        user = Users.objects.create(**validated_data)
+        if password:
+            user.set_password(password)
+            user.save()
+        return user
+```
+
+### 权限控制规范
+- 使用Django REST Framework的权限类
+- 方法级别权限控制使用装饰器
+- 数据级别权限在get_queryset中过滤
+
+```python
+from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated
+from dvladmin.utils.permission import CommonPermission
+
+class UserViewSet(CustomModelViewSet):
+    permission_classes = [IsAuthenticated, CommonPermission]
+    
+    @action(detail=True, methods=['post'])
+    def reset_password(self, request, pk=None):
+        """重置用户密码"""
+        user = self.get_object()
+        # 重置密码逻辑
+        return SuccessResponse(msg="密码重置成功")
+    
+    def get_queryset(self):
+        """根据用户权限过滤数据"""
+        queryset = super().get_queryset()
+        # 非超级管理员只能看到自己的数据
+        if not request.user.is_superuser:
+            queryset = queryset.filter(creator=request.user)
+        return queryset
+```
+
+## 响应格式规范
+
+### 统一响应格式
+使用项目自定义的响应类，确保所有API返回格式一致：
+
+```python
+from dvladmin.utils.json_response import DetailResponse, SuccessResponse, ErrorResponse
+
+# 成功响应
+return SuccessResponse(data=serializer.data, msg="操作成功")
+
+# 详情响应
+return DetailResponse(data=serializer.data, msg="获取成功")
+
+# 错误响应  
+return ErrorResponse(msg="操作失败", code=400)
+```
+
+### 标准响应结构
+```json
+{
+    "code": 200,
+    "msg": "操作成功",  
+    "data": {
+        // 实际数据
+    },
+    "count": 100,  // 列表数据时的总数
+    "next": "http://...",  // 下一页链接
+    "previous": "http://..."  // 上一页链接
+}
+```
+
+## 分页规范
+
+### 使用自定义分页类
+项目使用[CustomPagination](mdc:dvadmin/utils/pagination.py)分页类：
+
+```python
+# 在ViewSet中设置分页
+pagination_class = CustomPagination
+
+# 分页参数
+# page: 页码
+# limit: 每页数量
+```
+
+## 过滤和搜索规范
+
+### 使用FilterSet进行过滤
+```python
+from django_filters import rest_framework as filters
+
+class UserFilter(filters.FilterSet):
+    """用户过滤器"""
+    create_datetime = filters.DateFromToRangeFilter(
+        field_name='create_datetime',
+        lookup_expr='range'
+    )
+    status = filters.BooleanFilter()
+    
+    class Meta:
+        model = Users
+        fields = ['status', 'role']
+
+class UserViewSet(CustomModelViewSet):
+    filterset_class = UserFilter
+    search_fields = ['username', 'name', 'email']
+    ordering_fields = ['create_datetime', 'username']
+```
+
+## 文档规范
+
+### API文档注释
+使用drf-yasg进行API文档生成：
+
+```python
+from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
+
+class UserViewSet(CustomModelViewSet):
+    
+    @swagger_auto_schema(
+        operation_description="获取用户列表",
+        manual_parameters=[
+            openapi.Parameter(
+                'status', 
+                openapi.IN_QUERY, 
+                description="用户状态", 
+                type=openapi.TYPE_BOOLEAN
+            ),
+        ],
+        responses={200: UserSerializer(many=True)}
+    )
+    def list(self, request, *args, **kwargs):
+        """获取用户列表"""
+        return super().list(request, *args, **kwargs)
+```
+
+## 异常处理规范
+
+### 使用自定义异常处理
+项目使用[CustomExceptionHandler](mdc:dvadmin/utils/exception.py)：
+
+```python
+from rest_framework import status
+from rest_framework.views import exception_handler
+from dvladmin.utils.json_response import ErrorResponse
+
+def custom_exception_handler(exc, context):
+    """自定义异常处理"""
+    response = exception_handler(exc, context)
+    
+    if response is not None:
+        return ErrorResponse(
+            msg=str(exc), 
+            code=response.status_code
+        )
+    
+    return response
+```
+
+## 数据验证规范
+
+### 输入验证
+- 所有用户输入必须进行验证
+- 使用Serializer的validate方法
+- 复杂验证逻辑可以定义自定义验证器
+
+```python
+from rest_framework import serializers
+
+def validate_phone_number(value):
+    """手机号验证器"""
+    import re
+    if not re.match(r'^1[3-9]\d{9}$', value):
+        raise serializers.ValidationError("手机号格式不正确")
+    return value
+
+class UserSerializer(CustomModelSerializer):
+    mobile = serializers.CharField(validators=[validate_phone_number])
+    
+    def validate(self, attrs):
+        """整体验证"""
+        # 复杂的业务逻辑验证
+        return attrs
+```
+
+## 性能优化规范
+
+### 查询优化
+- 使用select_related和prefetch_related优化关联查询
+- 合理使用only和defer限制字段
+- 避免N+1查询问题
+
+```python
+class UserViewSet(CustomModelViewSet):
+    def get_queryset(self):
+        """优化查询"""
+        return Users.objects.select_related('dept')\
+                           .prefetch_related('role')\
+                           .only('id', 'username', 'name', 'status')
+```
+
+### 缓存策略
+- 对频繁访问且变化较少的数据使用缓存
+- 使用Redis缓存复杂查询结果
+- 合理设置缓存过期时间
+
+## API版本控制
+
+### URL版本控制
+```python
+# 在urls.py中定义版本
+urlpatterns = [
+    path('api/v1/', include('dvladmin.system.urls')),
+    path('api/v2/', include('dvladmin.system.v2.urls')),
+]
+```
+
+### 向后兼容
+- 新版本API要保持向后兼容
+- 废弃的API要给出明确的提示
+- 提供迁移指南
+
+## 安全规范
+
+### 认证和授权
+- 使用JWT Token进行身份认证
+- 敏感操作要求重新验证
+- 实现细粒度的权限控制
+
+### 数据安全
+- 敏感数据不在响应中返回
+- 使用HTTPS传输
+- 防止SQL注入和XSS攻击
+- 对文件上传进行安全检查

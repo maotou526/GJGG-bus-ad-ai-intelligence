@@ -1,0 +1,59 @@
+---
+alwaysApply: true
+description: Django-Vue-Admin 后端项目结构和架构指导
+---
+
+# Django-Vue-Admin 后端项目结构指导
+
+## 项目概述
+这是一个基于Django + Django REST Framework的后端API项目，采用经典的Django项目结构。
+
+## 核心目录结构
+
+### 配置目录
+- [application/](mdc:application/) - Django项目配置目录
+  - [settings.py](mdc:application/settings.py) - 主配置文件，包含数据库、中间件、REST框架等配置
+  - [urls.py](mdc:application/urls.py) - 主URL路由配置
+  - [asgi.py](mdc:application/asgi.py) - ASGI应用入口
+  - [wsgi.py](mdc:application/wsgi.py) - WSGI应用入口
+  - [dispatch.py](mdc:application/dispatch.py) - 系统初始化分发器
+  - [sse_views.py](mdc:application/sse_views.py) - Server-Sent Events视图
+
+### 应用目录
+- [dvadmin/](mdc:dvladmin/) - 主应用目录
+  - [system/](mdc:dvadmin/system/) - 系统管理应用，包含用户、角色、权限等核心功能
+    - [models.py](mdc:dvadmin/system/models.py) - 数据模型定义（用户、角色、菜单等）
+    - [views/](mdc:dvadmin/system/views/) - 视图层，按功能模块拆分
+    - [fixtures/](mdc:dvadmin/system/fixtures/) - 初始数据和初始化脚本
+  - [utils/](mdc:dvadmin/utils/) - 工具类和公共组件
+    - [models.py](mdc:dvadmin/utils/models.py) - 基础模型类（软删除、审计字段等）
+    - [viewset.py](mdc:dvadmin/utils/viewset.py) - 自定义ViewSet基类
+    - [pagination.py](mdc:dvadmin/utils/pagination.py) - 分页组件
+    - [permission.py](mdc:dvadmin/utils/permission.py) - 权限验证组件
+
+### 其他重要目录
+- [conf/](mdc:conf/) - 环境配置文件
+- [plugins/](mdc:plugins/) - 插件目录
+- [static/](mdc:static/) - 静态文件目录
+- [templates/](mdc:templates/) - 模板文件目录
+- [logs/](mdc:logs/) - 日志文件目录
+
+## 入口文件
+- [main.py](mdc:main.py) - 使用uvicorn启动的主入口文件
+- [manage.py](mdc:manage.py) - Django标准管理命令入口
+
+## 架构特点
+1. **分层架构**: Model -> View -> Serializer -> Permission
+2. **模块化设计**: 按业务功能拆分应用和视图
+3. **插件化支持**: 通过plugins目录支持功能插件扩展
+4. **软删除**: 使用软删除机制而非物理删除
+5. **审计追踪**: 自动记录创建和修改信息
+6. **权限控制**: 基于角色的权限控制系统（RBAC）
+7. **API文档**: 集成Swagger/OpenAPI文档
+
+## 开发规范
+- 新增业务功能优先考虑在system应用下新建视图文件
+- 公共工具类放在utils目录下
+- 数据模型继承CoreModel基类以获得软删除和审计功能
+- 视图类继承CustomModelViewSet以获得完整的CRUD功能
+- API接口遵循RESTful设计规范
