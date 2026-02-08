@@ -21,7 +21,8 @@ const formModules = import.meta.glob([
 
 // 白名单路径的单独 glob（精确匹配特定文件）
 const whitelistFormModules = import.meta.glob([
-    '/src/views/booking_manage/booking_order/BookingOrderModelViewSet/components/BookingOrderReviewPage.vue'
+    '/src/views/booking_manage/booking_order/BookingOrderModelViewSet/components/BookingOrderReviewPage.vue',
+    '/src/views/booking_manage/booking_order/BookingOrderModelViewSet/components/BookingOrderForm.vue'
 ], { eager: false })
 
 // 无默认表单，找不到时返回 null
@@ -32,8 +33,10 @@ const componentCache: Record<string, Component> = {}
 // 表单路径白名单映射（用于特殊路径的映射）
 // key: 相对路径（相对于 /src/views/，不包含 .vue 后缀），value: 完整路径（相对于 /src/views/，包含 .vue 后缀）
 const formPathWhitelist: Record<string, string> = {
-    'booking_manage/booking_order/BookingOrderModelViewSet/components/BookingOrderReviewPage': 
-        'booking_manage/booking_order/BookingOrderModelViewSet/components/BookingOrderReviewPage.vue'
+    'booking_manage/booking_order/BookingOrderModelViewSet/components/BookingOrderReviewPage':
+        'booking_manage/booking_order/BookingOrderModelViewSet/components/BookingOrderReviewPage.vue',
+    'booking_manage/booking_order/BookingOrderModelViewSet/components/BookingOrderForm':
+        'booking_manage/booking_order/BookingOrderModelViewSet/components/BookingOrderForm.vue'
 }
 
 /**
