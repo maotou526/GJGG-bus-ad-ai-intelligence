@@ -23,6 +23,7 @@ from .serializers import (
     AIAuditLogSimpleSerializer
 )
 from ..services import AIAuditService
+from ..tasks import task_ai_audit_file, task_ai_audit_batch
 
 
 class AIAuditLogViewSet(CustomModelViewSet, FieldPermissionMixin):
@@ -221,3 +222,167 @@ class AIAuditLogViewSet(CustomModelViewSet, FieldPermissionMixin):
             import traceback
             traceback.print_exc()
             return ErrorResponse(msg=f"审核失败: {str(e)}", code=5000)
+
+    @action(methods=['POST'], detail=False, permission_classes=[])
+    def upload_and_audit_async(self, request):
+        """
+        上传文件并异步触发AI审核（Celery异步任务）
+
+        请求参数（FormData）：
+        - file: 文件对象（必填）
+        - audit_source: 审核来源（1:关联订单 2:独立审核）
+        - audit_type: 审核类型（1:画面内容 2:证明文件 3:综合审核）
+        - material_id: 关联材料ID（关联订单审核时必填）
+        - order_id: 上刊订单ID（可选）
+        - description: 备注说明（可选）
+
+        返回：任务ID，用于后续查询审核结果
+        """
+        try:
+            file = request.FILES.get('file')
+            if not file:
+                return ErrorResponse(msg="请上传文件")
+
+            audit_source = int(request.data.get('audit_source', 2))
+            audit_type = int(request.data.get('audit_type', 1))
+            material_id = request.data.get('material_id') or None
+            order_id = request.data.get('order_id') or None
+            description = request.data.get('description', '')
+
+            if audit_source == 1 and not material_id:
+                return ErrorResponse(msg="关联订单审核时必须填写关联材料ID")
+
+            # 保存文件到文件系统
+            file_serializer = FileSerializer(
+                data={'file': file},
+                context={'request': request}
+            )
+            file_serializer.is_valid(raise_exception=True)
+            file_obj = file_serializer.save()
+
+            file_name = file_obj.name
+            file_path = file_obj.file_url
+
+            print(f"[异步审核] 文件已保存: ID={file_obj.id}, 文件名={file_name}")
+
+            # 提交Celery异步任务（使用file_path而非file_object）
+            task = task_ai_audit_file.delay(
+                file_id=str(file_obj.id),
+                file_path=file_path,
+                file_name=file_name,
+                audit_type=audit_type,
+                material_id=material_id,
+                order_id=order_id,
+                audit_source=audit_source,
+                description=description,
+            )
+
+            print(f"[异步审核] 任务已提交: task_id={task.id}")
+
+            return DetailResponse(
+                data={
+                    'task_id': task.id,
+                    'file_id': str(file_obj.id),
+                    'file_name': file_name,
+                    'status': 'PENDING',
+                    'message': '审核任务已提交，请稍后查询结果',
+                },
+                msg="审核任务已提交"
+            )
+
+        except ValueError as e:
+            return ErrorResponse(msg=f"参数错误: {str(e)}")
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return ErrorResponse(msg=f"提交审核任务失败: {str(e)}", code=5000)
+
+    @action(methods=['GET'], detail=False, permission_classes=[])
+    def audit_task_status(self, request):
+        """
+        查询异步审核任务状态
+
+        请求参数（Query）：
+        - task_id: Celery任务ID（必填）
+
+        返回：任务状态和结果
+        """
+        task_id = request.query_params.get('task_id')
+        if not task_id:
+            return ErrorResponse(msg="请提供task_id参数")
+
+        try:
+            from celery.result import AsyncResult
+            result = AsyncResult(task_id)
+
+            data = {
+                'task_id': task_id,
+                'status': result.status,
+            }
+
+            if result.successful():
+                data['result'] = result.result
+                data['message'] = '审核完成'
+            elif result.failed():
+                data['error'] = str(result.result)
+                data['message'] = '审核失败'
+            elif result.status == 'RETRY':
+                data['message'] = '审核任务正在重试'
+            elif result.status == 'STARTED':
+                data['message'] = '审核任务正在执行中'
+            else:
+                data['message'] = '审核任务等待执行'
+
+            return DetailResponse(data=data, msg=data['message'])
+
+        except Exception as e:
+            return ErrorResponse(msg=f"查询任务状态失败: {str(e)}")
+
+    @action(methods=['POST'], detail=False, permission_classes=[])
+    def batch_audit_async(self, request):
+        """
+        批量异步审核多个文件
+
+        请求参数（JSON）：
+        - files: 文件列表 [{file_id, file_path, file_name, material_id}, ...]
+        - audit_type: 审核类型（1:画面内容 2:证明文件 3:综合审核）
+        - order_id: 上刊订单ID（可选）
+        - audit_source: 审核来源（1:关联订单 2:独立审核）
+        - description: 备注说明（可选）
+
+        返回：批量任务ID
+        """
+        try:
+            file_list = request.data.get('files', [])
+            if not file_list:
+                return ErrorResponse(msg="请提供文件列表")
+
+            audit_type = int(request.data.get('audit_type', 1))
+            order_id = request.data.get('order_id') or None
+            audit_source = int(request.data.get('audit_source', 1))
+            description = request.data.get('description', '')
+
+            task = task_ai_audit_batch.delay(
+                file_list=file_list,
+                audit_type=audit_type,
+                order_id=order_id,
+                audit_source=audit_source,
+                description=description,
+            )
+
+            print(f"[批量审核] 任务已提交: task_id={task.id}, 文件数={len(file_list)}")
+
+            return DetailResponse(
+                data={
+                    'task_id': task.id,
+                    'file_count': len(file_list),
+                    'status': 'PENDING',
+                    'message': f'批量审核任务已提交，共 {len(file_list)} 个文件',
+                },
+                msg="批量审核任务已提交"
+            )
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return ErrorResponse(msg=f"提交批量审核任务失败: {str(e)}", code=5000)

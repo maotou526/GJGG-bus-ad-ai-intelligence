@@ -88,6 +88,9 @@ ALLOWED_HOSTS = locals().get("ALLOWED_HOSTS", ["*"])
 # 列权限需要排除的App应用
 COLUMN_EXCLUDE_APPS = ['channels', 'captcha'] + locals().get("COLUMN_EXCLUDE_APPS", [])
 
+# 资源锁定模式：vehicle=整车锁定（默认），position=资源位锁定
+RESOURCE_LOCK_MODE = locals().get("RESOURCE_LOCK_MODE", "vehicle")
+
 INSTALLED_APPS = [
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -161,6 +164,13 @@ My_Apps = [
     #上下刊执行模块
     "dvadmin_twodev.airing_manage.on_air_order",
     "dvadmin_twodev.airing_manage.on_air_order_detail",
+    "dvadmin_twodev.airing_manage.on_air_material",
+    "dvadmin_twodev.airing_manage.construction_team",
+    "dvadmin_twodev.airing_manage.construction_team_member",
+    "dvadmin_twodev.airing_manage.construction_team_vehicle",
+    "dvadmin_twodev.airing_manage.on_air_worker",
+    "dvadmin_twodev.airing_manage.on_air_file",
+    "dvadmin_twodev.airing_manage.entry_reg",
     # OSM 模块
     "dvadmin_twodev.osm.osm_node",
     "dvadmin_twodev.osm.osm_way",

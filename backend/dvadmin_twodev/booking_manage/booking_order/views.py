@@ -31,6 +31,7 @@ from dvadmin_twodev.basedata.vehicle_ad_resource.models import VehicleAdResource
 from dvadmin_twodev.basedata.vehicle.models import VehicleModel
 from dvadmin_twodev.basedata.media_type.models import AdMediaTypeModel
 from dvadmin_twodev.basedata.media_type_composition.models import AdMediaTypeCompositionModel
+from django.conf import settings as django_settings
 
 # ==================== 状态常量 ====================
 # 预订单状态
@@ -1721,41 +1722,61 @@ class BookingOrderModelViewSet(CustomModelViewSet):
             enabled_mark=1
         ).values_list('id', flat=True)
         
+        # 获取资源锁定模式配置
+        lock_mode = getattr(django_settings, 'RESOURCE_LOCK_MODE', 'vehicle')
+        print(f"[紧凑贪心] 资源锁定模式: {lock_mode}")
         print(f"[紧凑贪心] 该线路下共有 {len(vehicles)} 辆可用车辆")
         if len(vehicles) > 0:
             print(f"[紧凑贪心] 车辆ID列表: {list(vehicles)[:5]}...")  # 只打印前5个
-        
+
         # 存储可用车辆及其匹配分
         available_vehicles_with_score = []
-        
+
         for idx, vehicle_id in enumerate(vehicles):
             print(f"[紧凑贪心] 检查车辆 {idx+1}/{len(vehicles)}: vehicle_id={vehicle_id}")
-            
-            # 检查该车辆的所有基础类型资源位是否都可用
+
             is_available = True
-            
-            for base_media_type in base_media_types:
-                print(f"[紧凑贪心]   检查基础类型: {base_media_type.media_name}")
-                
-                # 检查该资源位在时间段内是否有冲突
-                conflicts = VehicleAdPositionModel.objects.filter(
+
+            if lock_mode == 'vehicle':
+                # 整车锁定模式：检查车辆上是否有任何资源位在时间段内被占用
+                any_conflicts = VehicleAdPositionModel.objects.filter(
                     vehicle_id=vehicle_id,
-                    resource_id__base_media_type_id=base_media_type.id,
                     delete_mark=0,
                     enabled_mark=1,
                     allocation_status__in=[1, 2],  # 已分配或已上刊
                 ).filter(
-                    # 时间段重叠检测
                     Q(reserved_start_date__lte=end_date) &
                     Q(reserved_end_date__gte=start_date)
                 )
-                
-                if conflicts.exists():
-                    print(f"[紧凑贪心]   ✗ 有冲突，冲突数量={conflicts.count()}")
+
+                if any_conflicts.exists():
+                    print(f"[紧凑贪心]   ✗ 整车锁定模式：车辆有 {any_conflicts.count()} 个资源位被占用")
                     is_available = False
-                    break
                 else:
-                    print(f"[紧凑贪心]   ✓ 无冲突")
+                    print(f"[紧凑贪心]   ✓ 整车锁定模式：车辆完全空闲")
+            else:
+                # 资源位锁定模式：只检查需要的基础类型资源位是否可用
+                for base_media_type in base_media_types:
+                    print(f"[紧凑贪心]   检查基础类型: {base_media_type.media_name}")
+
+                    # 检查该资源位在时间段内是否有冲突
+                    conflicts = VehicleAdPositionModel.objects.filter(
+                        vehicle_id=vehicle_id,
+                        resource_id__base_media_type_id=base_media_type.id,
+                        delete_mark=0,
+                        enabled_mark=1,
+                        allocation_status__in=[1, 2],  # 已分配或已上刊
+                    ).filter(
+                        Q(reserved_start_date__lte=end_date) &
+                        Q(reserved_end_date__gte=start_date)
+                    )
+
+                    if conflicts.exists():
+                        print(f"[紧凑贪心]   ✗ 有冲突，冲突数量={conflicts.count()}")
+                        is_available = False
+                        break
+                    else:
+                        print(f"[紧凑贪心]   ✓ 无冲突")
             
             if is_available:
                 # 计算该车辆的匹配分（空闲连续天数）

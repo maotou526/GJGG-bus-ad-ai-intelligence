@@ -164,6 +164,13 @@ My_Urls = (
     #上下刊执行模块
     path('', include('dvadmin_twodev.airing_manage.on_air_order.urls')),
     path('', include('dvadmin_twodev.airing_manage.on_air_order_detail.urls')),
+    path('', include('dvadmin_twodev.airing_manage.on_air_material.urls')),
+    path('', include('dvadmin_twodev.airing_manage.construction_team.urls')),
+    path('', include('dvadmin_twodev.airing_manage.construction_team_member.urls')),
+    path('', include('dvadmin_twodev.airing_manage.construction_team_vehicle.urls')),
+    path('', include('dvadmin_twodev.airing_manage.on_air_worker.urls')),
+    path('', include('dvadmin_twodev.airing_manage.on_air_file.urls')),
+    path('', include('dvadmin_twodev.airing_manage.entry_reg.urls')),
     # OSM 模块
     path('', include('dvadmin_twodev.osm.osm_node.urls')),
     path('', include('dvadmin_twodev.osm.osm_way.urls')),
